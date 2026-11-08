@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">Trippers Coffee</title>
+  <desc id="desc">Trippers Coffee wordmark with a cluster of coffee beans.</desc>
+  <g fill="#080400" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">
+    <ellipse cx="594" cy="73" rx="73" ry="44" transform="rotate(-18 594 73)"/>
+    <ellipse cx="509" cy="113" rx="76" ry="45" transform="rotate(12 509 113)"/>
+    <ellipse cx="675" cy="115" rx="76" ry="45" transform="rotate(-12 675 115)"/>
+    <ellipse cx="590" cy="166" rx="79" ry="47" transform="rotate(10 590 166)"/>
+  </g>
+  <g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity=".9">
+    <path d="M551 66c24 8 53 11 85 5"/>
+    <path d="M460 111c27 7 55 8 90 3"/>
+    <path d="M631 111c23 8 50 8 81 1"/>
+    <path d="M535 163c30 7 62 9 101 1"/>
+  </g>
+  <g fill="#080400" font-family="Arial Black, Arial, sans-serif" font-weight="900" letter-spacing="-4">
+    <text x="8" y="293" font-size="102">TRIPPERS</text>
+    <text x="650" y="293" font-size="102">COFFEE</text>
+  </g>
+</svg>

@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Trippers Coffee counter POS for fast, friendly service.">
+  <meta name="theme-color" content="#090401">
+  <title>Trippers Coffee · Counter POS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/pos.css">
+  <link rel="stylesheet" href="css/theme.css">
+  <script src="js/theme.js" defer></script>
+  <script src="js/pos.js" defer></script>
+</head>
+<body data-page="pos">
+  <div class="app-shell">
+    <aside class="app-sidebar" id="app-sidebar" aria-label="Primary navigation">
+      <div class="sidebar-brand-wrap">
+        <a class="coffee-brand" href="index.html" aria-label="Trippers Coffee home">
+          <img class="pos-logo-image" src="assets/trippers-logo.svg" alt="Trippers Coffee">
+        </a>
+        <button class="sidebar-dismiss" id="sidebar-dismiss" type="button" aria-label="Close navigation">×</button>
+      </div>
+
+      <button class="store-switcher" type="button" id="store-switcher">
+        <span class="store-avatar">T</span>
+        <span class="store-switcher-copy"><strong>Trippers Coffee</strong><small><i class="open-dot"></i> Register online</small></span>
+        <span class="switcher-chevron" aria-hidden="true">⌄</span>
+      </button>
+
+      <nav class="sidebar-nav">
+        <p class="nav-label">Service</p>
+        <a class="nav-item active" href="#order" data-view="order"><span class="nav-icon">▦</span><span>New order</span><kbd>⌘1</kbd></a>
+        <a class="nav-item" href="#orders" data-view="orders"><span class="nav-icon">◷</span><span>Order history</span><em id="nav-order-count">12</em></a>
+        <p class="nav-label nav-label-spaced">Manage</p>
+        <a class="nav-item" href="#menu" data-view="menu"><span class="nav-icon">☷</span><span>Menu items</span></a>
+        <a class="nav-item" href="#inventory" data-view="inventory"><span class="nav-icon">▤</span><span>Inventory</span><em class="alert-count">3</em></a>
+        <a class="nav-item" href="#customers" data-view="customers"><span class="nav-icon">◎</span><span>Customers</span></a>
+        <a class="nav-item" href="#reports" data-view="reports"><span class="nav-icon">↗</span><span>Reports</span></a>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="support-card">
+          <span class="support-spark">✦</span>
+          <strong>Need a hand?</strong>
+          <p>Open the barista guide</p>
+          <button type="button" id="barista-guide">View guide <span>→</span></button>
+        </div>
+        <div class="cashier-profile">
+          <span class="cashier-avatar">JR</span>
+          <span><strong id="cashier-name">Cashier</strong><small id="cashier-role">Signed in · Register 01</small></span>
+          <button type="button" id="profile-menu" aria-label="Sign out">↗</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="mobile-nav-toggle" id="mobile-nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false"><span></span><span></span><span></span></button>
+          <div class="register-breadcrumb"><span class="breadcrumb-dot"></span><span>COUNTER / REGISTER 01</span><span class="breadcrumb-slash">/</span><strong>Ordering</strong></div>
+        </div>
+        <div class="topbar-right">
+          <button class="pos-theme-toggle" data-theme-toggle type="button" aria-label="Switch to light mode" title="Switch to light mode"><span data-theme-icon aria-hidden="true">☼</span><span data-theme-label>Light</span></button>
+          <div class="topbar-clock"><span class="clock-icon">◷</span><span id="live-time">09:41 AM</span></div>
+          <div class="connection-pill"><i></i> Online</div>
+          <button class="topbar-icon-button" id="notification-button" type="button" aria-label="Notifications"><span>♢</span><i></i></button>
+          <button class="topbar-admin-link" id="pos-signout" type="button">Sign out <span>↗</span></button>
+          <div class="topbar-user"><span class="topbar-user-avatar" id="cashier-initials">TC</span><span class="topbar-user-name" id="cashier-short-name">Cashier</span></div>
+        </div>
+      </header>
+
+      <main class="main-content" id="order-view">
+        <section class="page-intro">
+          <div>
+            <p class="eyebrow" id="today-label">WEDNESDAY, SEPTEMBER 24, 2025</p>
+            <h1>Make someone’s day <em>better.</em></h1>
+            <p class="intro-copy">Build an order, make it personal, and send them on their way.</p>
+          </div>
+          <div class="intro-actions">
+            <div class="order-mode" role="group" aria-label="Order mode">
+              <button class="mode-button active" type="button" data-mode="counter"><span class="mode-icon">▣</span> Counter</button>
+              <button class="mode-button" type="button" data-mode="drive"><span class="mode-icon">⌁</span> Drive-thru</button>
+            </div>
+            <button class="outline-action" id="hold-order" type="button"><span>Ⅱ</span> Hold order</button>
+          </div>
+        </section>
+
+        <section class="metrics-row" aria-label="Store snapshot">
+          <article class="metric-card">
+            <div class="metric-icon metric-icon-green">◷</div>
+            <div><span>Open tickets</span><strong id="metric-open-tickets">0</strong><small>Active orders</small></div>
+            <div class="metric-sparkline green-sparkline"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </article>
+          <article class="metric-card">
+            <div class="metric-icon metric-icon-gold">$</div>
+            <div><span>Net sales today</span><strong id="metric-sales">₱0.00</strong><small>Paid orders today</small></div>
+            <div class="metric-sparkline gold-sparkline"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </article>
+          <article class="metric-card">
+            <div class="metric-icon metric-icon-coral">◒</div>
+            <div><span>Average ticket</span><strong id="metric-average">₱0.00</strong><small>Average paid order</small></div>
+            <div class="metric-sparkline coral-sparkline"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </article>
+          <article class="metric-card metric-card-highlight">
+            <div class="metric-icon metric-icon-cream">✦</div>
+            <div><span>Ready to serve</span><strong id="metric-ready">0</strong><small class="highlight-copy">Orders ready for pickup</small></div>
+            <span class="metric-badge">LIVE</span>
+          </article>
+        </section>
+
+        <section class="register-layout" aria-label="Order station">
+          <section class="menu-panel panel">
+            <div class="panel-header menu-panel-header">
+              <div>
+                <p class="panel-kicker">Build a drink</p>
+                <h2>Menu</h2>
+              </div>
+              <div class="menu-header-meta"><span class="live-pill"><i></i> Menu live</span><button class="icon-ghost" id="menu-settings" type="button" aria-label="Menu settings">⚙</button></div>
+            </div>
+            <div class="category-tabs" id="category-tabs" role="tablist" aria-label="Menu categories">
+              <button class="category-tab active" type="button" data-category="All" role="tab" aria-selected="true"><span>✦</span> All items</button>
+              <button class="category-tab" type="button" data-category="Espresso" role="tab" aria-selected="false">Espresso</button>
+              <button class="category-tab" type="button" data-category="Cold coffee" role="tab" aria-selected="false">Cold coffee</button>
+              <button class="category-tab" type="button" data-category="Tea" role="tab" aria-selected="false">Tea</button>
+              <button class="category-tab" type="button" data-category="Bakery" role="tab" aria-selected="false">Bakery</button>
+              <button class="category-tab" type="button" data-category="Breakfast" role="tab" aria-selected="false">Breakfast</button>
+            </div>
+            <div class="menu-toolbar">
+              <label class="menu-search" for="menu-search"><span aria-hidden="true">⌕</span><input id="menu-search" type="search" placeholder="Search menu" autocomplete="off"><kbd>⌘ K</kbd></label>
+              <div class="menu-toolbar-actions"><button class="filter-button active" type="button" id="popular-filter">Popular</button><button class="filter-button" type="button" id="clear-filters">Clear</button></div>
+            </div>
+            <div class="menu-grid" id="menu-grid" aria-live="polite"></div>
+            <div class="menu-empty" id="menu-empty" hidden><span>⌕</span><h3>No menu items found</h3><p>Try another search or category.</p></div>
+          </section>
+
+          <aside class="order-panel panel" aria-labelledby="order-title">
+            <div class="order-panel-top">
+              <div><p class="panel-kicker">Current ticket</p><h2 id="order-title">New order <span class="order-number" id="order-number">New</span></h2></div>
+              <button class="clear-order" id="clear-order" type="button">Clear</button>
+            </div>
+            <div class="customer-fields">
+              <label class="field-label" for="customer-name">Customer <span>email or loyalty ID</span></label>
+              <div class="customer-input-wrap"><span>◎</span><input id="customer-name" type="text" placeholder="Add a name, email, or loyalty ID" autocomplete="off"></div>
+            </div>
+            <div class="order-items" id="order-items"></div>
+            <div class="order-empty" id="order-empty">
+              <div class="empty-cup" aria-hidden="true"><span>☕</span></div>
+              <h3>Your ticket is ready.</h3>
+              <p>Tap any menu item to start a new order.</p>
+            </div>
+            <div class="order-summary" id="order-summary">
+              <div class="summary-line"><span>Subtotal</span><strong id="order-subtotal">₱0.00</strong></div>
+              <div class="summary-line"><span>Tax <small id="tax-rate-label">12%</small></span><strong id="order-tax">₱0.00</strong></div>
+              <div class="summary-line" id="service-charge-row" hidden><span>Service charge <small id="service-rate-label">0%</small></span><strong id="order-service">₱0.00</strong></div>
+              <div class="summary-line summary-total"><span>Total</span><strong id="order-total">₱0.00</strong></div>
+              <button class="charge-button" id="charge-button" type="button" disabled><span>Charge</span><strong id="charge-amount">₱0.00</strong><span class="charge-arrow">→</span></button>
+              <button class="hold-link" id="hold-link" type="button"><span>Ⅱ</span> Save as held order</button>
+            </div>
+          </aside>
+        </section>
+
+        <section class="bottom-row">
+          <section class="quick-section panel" aria-labelledby="quick-title">
+            <div class="panel-header compact-header"><div><p class="panel-kicker">Shortcuts</p><h2 id="quick-title">Quick actions</h2></div><span class="shortcut-hint">⌘ K to search</span></div>
+            <div class="quick-actions">
+              <button type="button" class="quick-action" data-quick-action="new"><span class="quick-action-icon quick-green">＋</span><span><strong>New order</strong><small>Start a clean ticket</small></span><b>⌘N</b></button>
+              <button type="button" class="quick-action" data-quick-action="drawer"><span class="quick-action-icon quick-gold">◫</span><span><strong>Check drawer</strong><small>Cash count &amp; totals</small></span><b>⌘D</b></button>
+              <button type="button" class="quick-action" data-quick-action="handoff"><span class="quick-action-icon quick-coral">◒</span><span><strong>Ready for handoff</strong><small>3 orders in queue</small></span><b>⌘R</b></button>
+              <button type="button" class="quick-action" data-quick-action="pause"><span class="quick-action-icon quick-lilac">Ⅱ</span><span><strong>Pause register</strong><small>Take a quick break</small></span><b>⌘P</b></button>
+            </div>
+          </section>
+          <section class="recent-section panel" aria-labelledby="recent-title">
+            <div class="panel-header compact-header"><div><p class="panel-kicker">Live feed</p><h2 id="recent-title">Recent orders</h2></div><button class="view-all-button" type="button" id="view-orders">View all <span>→</span></button></div>
+            <div class="recent-orders" id="recent-orders"></div>
+          </section>
+        </section>
+      </main>
+
+      <main class="secondary-view" id="secondary-view" hidden>
+        <section class="empty-dashboard-view">
+          <div class="secondary-icon" id="secondary-icon">◷</div>
+          <p class="eyebrow" id="secondary-kicker">Trippers workspace</p>
+          <h1 id="secondary-title">Order history</h1>
+          <p id="secondary-copy">Review the tickets from your current shift and keep an eye on the queue.</p>
+          <button class="primary-button" id="back-to-order" type="button">Back to new order <span>→</span></button>
+        </section>
+      </main>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="modal-backdrop" hidden></div>
+
+  <section class="customizer-modal" id="customizer-modal" role="dialog" aria-modal="true" aria-labelledby="customizer-title" aria-hidden="true">
+    <button class="modal-close-button" id="customizer-close" type="button" aria-label="Close customization">×</button>
+    <div class="customizer-art" id="customizer-art"></div>
+    <div class="customizer-body">
+      <p class="panel-kicker" id="customizer-category">Espresso</p>
+      <h2 id="customizer-title">Caramel Macchiato</h2>
+      <p class="customizer-description" id="customizer-description"></p>
+      <div class="customizer-options" id="customizer-options"></div>
+      <label class="notes-label" for="item-notes">Special instructions <span>optional</span></label>
+      <textarea id="item-notes" rows="2" placeholder="Anything else we should know?"></textarea>
+      <div class="customizer-footer">
+        <div class="quantity-stepper" aria-label="Quantity"><button type="button" data-custom-quantity="decrease" aria-label="Decrease quantity">−</button><span id="customizer-quantity">1</span><button type="button" data-custom-quantity="increase" aria-label="Increase quantity">+</button></div>
+        <button class="primary-button customizer-add" id="add-custom-item" type="button"><span>Add to order</span><strong id="customizer-price">₱0.00</strong></button>
+      </div>
+    </div>
+  </section>
+
+  <section class="payment-modal" id="payment-modal" role="dialog" aria-modal="true" aria-labelledby="payment-title" aria-hidden="true">
+    <button class="modal-close-button" id="payment-close" type="button" aria-label="Close payment">×</button>
+    <div class="payment-view" id="payment-view">
+      <div class="payment-heading"><div><p class="panel-kicker">Secure checkout</p><h2 id="payment-title">Take payment</h2></div><span class="payment-lock">⌑</span></div>
+      <div class="payment-total-card"><span>Amount due</span><strong id="payment-total">₱0.00</strong><small>Order <span id="payment-order-number">New</span> · <span id="payment-item-count">0 items</span></small></div>
+      <div class="payment-methods" role="radiogroup" aria-label="Payment method">
+        <button class="payment-method active" type="button" data-payment-method="card"><span class="payment-method-icon">▱</span><span><strong>Card</strong><small>Tap, dip or swipe</small></span><i>✓</i></button>
+        <button class="payment-method" type="button" data-payment-method="cash"><span class="payment-method-icon">$</span><span><strong>Cash</strong><small>Record payment</small></span><i>✓</i></button>
+        <button class="payment-method" type="button" data-payment-method="mobile"><span class="payment-method-icon">⌁</span><span><strong>Mobile</strong><small>Wallet or QR</small></span><i>✓</i></button>
+      </div>
+      <div class="payment-detail" id="payment-detail"></div>
+      <button class="primary-button confirm-payment" id="confirm-payment" type="button"><span>Complete sale</span><strong id="confirm-payment-amount">₱0.00</strong><span>→</span></button>
+      <p class="payment-note">Payments are recorded after the cashier confirms the terminal or wallet transaction. No card details are stored.</p>
+    </div>
+    <div class="payment-success" id="payment-success" hidden>
+      <div class="success-mark"><span>✓</span></div>
+      <p class="panel-kicker">Payment approved</p>
+      <h2>Order sent to the bar.</h2>
+      <p>Thanks for making someone’s day a little brighter.</p>
+      <div class="receipt-number"><span>Order number</span><strong id="receipt-number">New</strong></div>
+      <div class="receipt-total"><span>Charged</span><strong id="receipt-total">₱0.00</strong></div>
+      <div class="success-actions"><button class="primary-button" id="start-new-order" type="button">Start new order <span>→</span></button><button class="outline-action" id="print-receipt" type="button">Print receipt</button></div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"><span class="toast-mark">✓</span><span id="toast-message">Order updated</span></div>
+</body>
+</html>

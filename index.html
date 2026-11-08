@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0805">
+  <meta name="description" content="Secure Trippers Coffee point of sale sign in.">
+  <title>Sign in · Trippers Coffee</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/auth.css">
+  <script src="js/auth.js" defer></script>
+</head>
+<body>
+  <div class="splash" id="splash" aria-label="Loading Trippers Coffee">
+    <div class="splash-mark"><img src="assets/trippers-logo.svg" alt=""></div>
+    <p>TRIPPERS <span>COFFEE</span></p>
+    <div class="splash-progress"><i></i></div>
+    <span class="splash-caption">Preparing your workspace</span>
+  </div>
+
+  <main class="auth-shell" id="auth-shell" hidden>
+    <section class="brand-panel" aria-label="Trippers Coffee">
+      <a class="brand-logo" href="/" aria-label="Trippers Coffee home"><img src="assets/trippers-logo.svg" alt="Trippers Coffee"></a>
+      <div class="brand-copy">
+        <p class="eyebrow">A BETTER CUP. A BETTER DAY.</p>
+        <h1>Welcome to your<br><em>coffee house.</em></h1>
+        <p>One calm place to serve guests, care for your team, and keep the shop running beautifully.</p>
+      </div>
+      <div class="brand-foot"><span class="status-dot"></span> TRIPPERS COFFEE · POINT OF SALE</div>
+      <div class="brand-orbit orbit-one"></div><div class="brand-orbit orbit-two"></div>
+    </section>
+
+    <section class="form-panel">
+      <div class="mobile-brand"><img src="assets/trippers-logo.svg" alt="Trippers Coffee"></div>
+      <div class="auth-card">
+        <div class="form-heading">
+          <p class="eyebrow" id="form-eyebrow">TEAM ACCESS</p>
+          <h2 id="form-title">Sign in</h2>
+          <p id="form-copy">Use the account provided by your administrator.</p>
+        </div>
+
+        <form id="login-form" novalidate>
+          <label class="field-label">Sign in as</label>
+          <div class="role-options" role="group" aria-label="Choose account role">
+            <button type="button" class="role-option active" data-role="cashier" aria-pressed="true"><span class="role-icon">▣</span> Cashier</button>
+            <button type="button" class="role-option" data-role="admin" aria-pressed="false"><span class="role-icon">◇</span> Administrator</button>
+          </div>
+          <label class="field-label" for="identifier">Username or email</label>
+          <input id="identifier" name="identifier" type="text" autocomplete="username" maxlength="160" placeholder="Enter your username or email" required>
+          <label class="field-label" for="password">Password</label>
+          <div class="password-field">
+            <input id="password" name="password" type="password" autocomplete="current-password" maxlength="200" placeholder="Enter your password" required>
+            <button type="button" class="password-toggle" data-toggle-password="password" aria-label="Show password">Show</button>
+          </div>
+          <div class="form-options">
+            <label class="remember-option"><input id="remember" type="checkbox"><span>Keep me signed in</span></label>
+            <button class="text-button" type="button" id="forgot-link">Forgot password?</button>
+          </div>
+          <p class="form-message" id="login-message" role="status" aria-live="polite"></p>
+          <button class="primary-button" type="submit"><span>Continue to workspace</span><b>→</b></button>
+        </form>
+
+        <form id="change-password-form" hidden novalidate>
+          <label class="field-label" for="current-password">Temporary password</label>
+          <input id="current-password" type="password" autocomplete="current-password" maxlength="200">
+          <label class="field-label" for="new-password">New password</label>
+          <input id="new-password" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+          <p class="field-hint">Use at least 8 characters, including a letter and a number.</p>
+          <label class="field-label" for="confirm-password">Confirm new password</label>
+          <input id="confirm-password" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+          <p class="form-message" id="change-message" role="status" aria-live="polite"></p>
+          <button class="primary-button" type="submit"><span>Update password</span><b>→</b></button>
+          <button class="text-button back-button" type="button" id="signout-change">Sign out</button>
+        </form>
+
+        <form id="setup-form" hidden novalidate>
+          <p class="setup-note">First-time setup · Create the system administrator account.</p>
+          <label class="field-label" for="setup-token">One-time setup token</label>
+          <input id="setup-token" type="password" autocomplete="off" required>
+          <div class="form-grid">
+            <div><label class="field-label" for="setup-name">Full name</label><input id="setup-name" autocomplete="name" maxlength="120" required></div>
+            <div><label class="field-label" for="setup-username">Username</label><input id="setup-username" autocomplete="username" maxlength="40" required></div>
+          </div>
+          <label class="field-label" for="setup-email">Email</label>
+          <input id="setup-email" type="email" autocomplete="email" maxlength="160" required>
+          <label class="field-label" for="setup-shop">Coffee shop name</label>
+          <input id="setup-shop" value="Trippers Coffee" maxlength="120">
+          <label class="field-label" for="setup-password">Password</label>
+          <input id="setup-password" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+          <label class="field-label" for="setup-confirm">Confirm password</label>
+          <input id="setup-confirm" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+          <p class="field-hint">At least 8 characters, including a letter and a number.</p>
+          <p class="form-message" id="setup-message" role="status" aria-live="polite"></p>
+          <button class="primary-button" type="submit"><span>Initialize system</span><b>→</b></button>
+        </form>
+
+        <form id="forgot-form" hidden novalidate>
+          <p class="setup-note">Enter your username or email. If the account exists, the administrator will be notified.</p>
+          <label class="field-label" for="forgot-identifier">Username or email</label>
+          <input id="forgot-identifier" autocomplete="username" maxlength="160" required>
+          <p class="form-message" id="forgot-message" role="status" aria-live="polite"></p>
+          <button class="primary-button" type="submit"><span>Request password help</span><b>→</b></button>
+          <button class="text-button back-button" type="button" id="back-to-login">Back to sign in</button>
+        </form>
+        <p class="system-footer">Secure staff access · Authorized team members only</p>
+      </div>
+      <footer class="copyright">© <span id="year"></span> Trippers Coffee</footer>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Trippers Coffee admin portal.">
+  <meta name="theme-color" content="#090401">
+  <title>Admin Portal · Trippers Coffee</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/admin.css">
+  <link rel="stylesheet" href="../css/theme.css">
+  <script src="../js/theme.js" defer></script>
+  <script src="../js/admin.js" defer></script>
+</head>
+<body data-page="admin-login" class="admin-login-page">
+  <button class="admin-theme-toggle login-theme-toggle" data-theme-toggle type="button" aria-label="Switch to light mode" title="Switch to light mode"><span data-theme-icon aria-hidden="true">☼</span><span data-theme-label>Light</span></button>
+  <div class="admin-login-glow admin-glow-left" aria-hidden="true"></div><div class="admin-login-glow admin-glow-right" aria-hidden="true"></div>
+  <main class="admin-login-layout">
+    <div class="admin-login-logo"><img src="../assets/trippers-logo.svg" alt="Trippers Coffee"></div>
+    <p class="admin-login-subbrand">ADMIN</p>
+    <h1>Admin Portal</h1>
+    <p class="admin-login-tagline">Trippers Coffee Management System</p>
+    <section class="admin-login-card" aria-labelledby="admin-login-title">
+      <h2 id="admin-login-title" class="sr-only">Sign in to Trippers admin</h2>
+      <form id="admin-login-form" novalidate>
+        <label for="admin-email">Email Address</label>
+        <input id="admin-email" name="email" type="email" autocomplete="username" placeholder="admin@tripperscoffee.com" required>
+        <label for="admin-password">Password</label>
+        <div class="admin-password-wrap"><input id="admin-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required><button type="button" id="toggle-password">Show</button></div>
+        <p class="admin-login-error" id="login-error" role="alert"></p>
+        <button class="admin-login-button" type="submit">Sign In <span>→</span></button>
+      </form>
+    </section>
+    <a class="admin-back-link" href="../index.html">← Team sign in</a>
+  </main>
+</body>
+</html>

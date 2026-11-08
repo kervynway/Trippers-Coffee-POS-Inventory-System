@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Trippers Coffee management dashboard.">
+  <meta name="theme-color" content="#090401">
+  <title>Admin Dashboard · Trippers Coffee</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/admin.css">
+  <link rel="stylesheet" href="../css/theme.css">
+  <script src="../js/theme.js" defer></script>
+  <script src="../js/admin.js" defer></script>
+</head>
+<body data-page="admin-dashboard" class="admin-dashboard-page">
+  <aside class="admin-sidebar" id="admin-sidebar">
+    <div class="admin-sidebar-brand"><a class="admin-sidebar-logo-link" href="../index.html" aria-label="Trippers Coffee home"><img class="admin-sidebar-logo-image" src="../assets/trippers-logo.svg" alt="Trippers Coffee"></a><span class="admin-sidebar-admin-label">ADMIN</span><button class="admin-sidebar-close" id="admin-sidebar-close" type="button" aria-label="Close navigation">×</button></div>
+    <nav class="admin-sidebar-nav" aria-label="Admin navigation">
+      <button class="active" type="button" data-section="dashboard"><span>▦</span> Dashboard</button>
+      <button type="button" data-section="products"><span>📦</span> Products</button>
+      <button type="button" data-section="inventory"><span>🏪</span> Inventory</button>
+      <button type="button" data-section="staff"><span>♙</span> Cashier accounts</button>
+      <button type="button" data-section="loyalty"><span>♧</span> Loyalty & customers <b id="admin-loyalty-count">0</b></button>
+      <button type="button" data-section="orders"><span>▤</span> Orders <b id="sidebar-order-count">4</b></button>
+      <button type="button" data-section="cancelled"><span>⊘</span> Cancelled orders <b id="sidebar-cancelled-count">0</b></button>
+      <button type="button" data-section="sales"><span>💰</span> Sales</button>
+    </nav>
+    <div class="admin-sidebar-bottom"><a href="../index.html" target="_blank" rel="noreferrer"><span>🏠</span> Customer Site</a><button id="admin-signout" type="button"><span>▣</span> Logout</button><div class="admin-user"><span class="admin-user-avatar">TA</span><span><strong>Trippers Admin</strong><small>Store manager</small></span><i></i></div></div>
+  </aside>
+  <div class="admin-sidebar-backdrop" id="admin-sidebar-backdrop" hidden></div>
+
+  <div class="admin-workspace">
+    <header class="admin-topbar"><div class="admin-topbar-left"><button class="admin-mobile-toggle" id="admin-mobile-toggle" type="button" aria-label="Open navigation"><span></span><span></span><span></span></button><span class="admin-topbar-context" id="admin-date">THURSDAY, SEPTEMBER 24, 2026</span></div><div class="admin-topbar-right"><button class="admin-theme-toggle" data-theme-toggle type="button" aria-label="Switch to light mode" title="Switch to light mode"><span data-theme-icon aria-hidden="true">☼</span><span data-theme-label>Light</span></button><span class="admin-store-status"><i></i> Store online</span><button class="admin-bell" id="admin-bell" type="button" aria-label="Notifications">♢<i></i></button><a class="admin-view-site" href="../index.html" target="_blank" rel="noreferrer">View site <span>↗</span></a></div></header>
+    <main class="admin-main">
+      <section class="admin-panel active" data-panel="dashboard">
+        <div class="admin-page-heading"><div><p class="admin-kicker">TRIPPERS COFFEE · MANAGEMENT SYSTEM</p><h1>Good morning, <em>Admin.</em></h1><p>Here’s what’s happening at Trippers today.</p></div><button class="admin-gold-button" id="dashboard-refresh" type="button">↻ Refresh</button></div>
+        <div class="admin-stat-grid"><article class="admin-stat-card low-stock"><div><span>LOW STOCK</span><strong id="stat-low-stock">2</strong><small>Needs restock</small></div><b>⚠</b></article><article class="admin-stat-card"><div><span>TODAY’S ORDERS</span><strong id="stat-today-orders">4</strong><small id="stat-order-date">Sep 24, 2026</small></div><b>▤</b></article><article class="admin-stat-card"><div><span>TODAY’S SALES</span><strong id="stat-today-sales">₱395</strong><small>Completed orders</small></div><b>💰</b></article></div>
+        <section class="admin-dashboard-card sales-overview"><div class="admin-card-heading"><div><p class="admin-card-kicker">SALES OVERVIEW</p><h2>Weekly performance</h2></div><strong class="admin-card-total" id="weekly-sales-total">₱18.4K</strong></div><div class="admin-sales-chart" id="sales-chart"><div class="chart-y-labels"><span>₱4K</span><span>₱3K</span><span>₱2K</span><span>₱1K</span><span>₱0</span></div><div class="chart-columns" id="chart-columns"></div></div><div class="chart-labels"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div></section>
+        <div class="admin-dashboard-columns"><section class="admin-dashboard-card"><div class="admin-card-heading"><div><p class="admin-card-kicker">RECENT ACTIVITY</p><h2>Recent orders</h2></div><button class="admin-text-button" type="button" data-section-link="orders">View all →</button></div><div class="admin-recent-orders" id="recent-orders"></div></section><section class="admin-dashboard-card low-stock-list"><div class="admin-card-heading"><div><p class="admin-card-kicker">INVENTORY</p><h2>Stock watch</h2></div><button class="admin-text-button" type="button" data-section-link="inventory">Review →</button></div><div id="stock-watch"></div></section></div>
+      </section>
+
+      <section class="admin-panel" data-panel="products">
+        <div class="admin-page-heading"><div><p class="admin-kicker">CATALOG MANAGEMENT</p><h1>Our <em>Products.</em></h1><p>Keep the menu clear, current, and ready for every order.</p></div><button class="admin-gold-button" id="add-product" type="button">＋ Add product</button></div>
+        <section class="admin-dashboard-card admin-products-card"><div class="admin-toolbar"><div class="admin-product-tabs"><button class="active" type="button" data-product-filter="all">All</button><button type="button" data-product-filter="drink">Drinks</button><button type="button" data-product-filter="food">Food</button></div><label class="admin-search"><span>⌕</span><input id="product-search" type="search" placeholder="Search products..."></label></div><div class="admin-product-grid" id="admin-product-grid"></div></section>
+      </section>
+
+      <section class="admin-panel" data-panel="inventory">
+        <div class="admin-page-heading"><div><p class="admin-kicker">STOCK CONTROL</p><h1>Keep it <em>Fresh.</em></h1><p>Know what needs attention before the next rush.</p></div><button class="admin-gold-button" id="add-ingredient" type="button">＋ Add ingredient</button></div>
+        <div class="admin-inventory-summary"><article><span>📦</span><div><strong id="inventory-total">0</strong><small>Total units</small></div></article><article><span>⚠</span><div><strong id="inventory-low">0</strong><small>Need restock</small></div></article><article><span>✓</span><div><strong id="inventory-healthy">0</strong><small>Healthy items</small></div></article></div>
+        <section class="admin-dashboard-card admin-table-card"><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Ingredient</th><th>Category</th><th>On hand</th><th>Low-stock level</th><th>Status</th><th>Actions</th></tr></thead><tbody id="inventory-body"></tbody></table></div></section>
+      </section>
+
+      <section class="admin-panel" data-panel="staff">
+        <div class="admin-page-heading"><div><p class="admin-kicker">TEAM ACCESS</p><h1>Cashier <em>Accounts.</em></h1><p>Create and manage secure cashier sign-ins for your team.</p></div><button class="admin-gold-button" id="add-cashier" type="button">＋ Add cashier</button></div>
+        <section class="admin-dashboard-card admin-table-card">
+          <div class="admin-toolbar"><p class="admin-card-kicker">CASHIER ACCESS</p><label class="admin-search"><span>⌕</span><input id="cashier-search" type="search" placeholder="Search name, username, or email..."></label></div>
+          <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Cashier</th><th>Username</th><th>Email</th><th>Status</th><th>Last updated</th><th>Actions</th></tr></thead><tbody id="cashiers-body"></tbody></table></div>
+          <div class="admin-table-footer" id="cashiers-footer">Loading cashier accounts...</div>
+        </section>
+      </section>
+
+      <section class="admin-panel" data-panel="loyalty">
+        <div class="admin-page-heading"><div><p class="admin-kicker">TRIPPERS CIRCLE</p><h1>Loyalty <em>&amp; Customers.</em></h1><p>See your members, manage their cards, and keep rewards moving.</p></div><div class="admin-heading-actions"><button class="admin-outline-button" id="export-customers" type="button">↓ Export customers</button><button class="admin-gold-button" id="issue-loyalty-card" type="button">＋ Issue card</button></div></div>
+        <div class="loyalty-stat-grid"><article><span>♧</span><div><strong id="loyalty-members">0</strong><small>Total members</small></div></article><article><span>▣</span><div><strong id="loyalty-cards-available">0</strong><small>Cards available</small></div></article><article><span>✦</span><div><strong id="loyalty-points">0</strong><small>Points outstanding</small></div></article><article><span>↗</span><div><strong id="loyalty-rewards">0</strong><small>Rewards redeemed</small></div></article><article><span>✓</span><div><strong id="loyalty-qualified">0</strong><small>Ready to issue</small></div></article></div>
+        <div class="loyalty-layout"><section class="admin-dashboard-card loyalty-members-card"><div class="admin-card-heading"><div><p class="admin-card-kicker">MEMBER DIRECTORY</p><h2>Loyal customers</h2></div><span class="member-count-label" id="member-count-label">0 members</span></div><div class="loyalty-toolbar"><label class="admin-search"><span>⌕</span><input id="customer-search" type="search" placeholder="Search name, email, or card ID..."></label><select id="loyalty-tier-filter"><option value="all">All tiers</option><option value="Member">Member</option><option value="Gold">Gold</option><option value="Platinum">Platinum</option></select></div><div class="admin-table-wrap"><table class="admin-table loyalty-table"><thead><tr><th>Customer</th><th>Card ID</th><th>Points</th><th>Tier</th><th>Orders</th><th>Card status</th><th>Last visit</th><th>QR</th><th></th></tr></thead><tbody id="loyalty-body"></tbody></table></div><div class="admin-table-footer" id="loyalty-footer">Showing 0 members</div></section><aside class="admin-dashboard-card card-inventory-card"><div class="admin-card-heading"><div><p class="admin-card-kicker">CARD INVENTORY</p><h2>Ready to issue</h2></div><span>✦</span></div><div class="card-stock-number"><strong id="card-stock-count">0</strong><span>cards in stock</span></div><div class="card-stock-bar"><i id="card-stock-bar-fill"></i></div><p>Cards are issued automatically after 5 qualifying, non-cancelled orders. Pending members stay here until their fifth order, then their card is added to the loyalty inventory. Issued cards remain active if an order is cancelled later.</p><button class="admin-outline-button" id="restock-loyalty-cards" type="button">＋ Add card stock</button><div class="card-inventory-note"><span>♧</span><div><strong>Trippers Circle</strong><small>1 point for every ₱10 spent</small></div></div></aside></div>
+      </section>
+
+      <section class="admin-panel" data-panel="orders">
+        <div class="admin-page-heading"><div><p class="admin-kicker">ORDER MANAGEMENT</p><h1>All <em>Orders.</em></h1><p>Keep every order moving from cart to counter.</p></div><button class="admin-outline-button" id="export-orders" type="button">↓ Export CSV</button></div>
+        <section class="admin-dashboard-card admin-table-card"><div class="admin-toolbar"><label class="admin-search"><span>⌕</span><input id="order-search" type="search" placeholder="Search by order or customer..."></label><select id="order-status-filter"><option value="active">Active orders</option><option value="all">All statuses</option><option value="New">New</option><option value="Preparing">Preparing</option><option value="Completed">Completed</option><option value="Cancelled">Cancelled</option></select></div><p class="order-filter-note">Completed and cancelled orders leave the active queue. Select “All statuses” to view history.</p><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Placed</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody id="orders-body"></tbody></table></div><div class="admin-table-footer" id="orders-footer">Showing 0 orders</div></section>
+      </section>
+
+      <section class="admin-panel" data-panel="cancelled">
+        <div class="admin-page-heading"><div><p class="admin-kicker">ORDER ARCHIVE</p><h1>Cancelled <em>Orders.</em></h1><p>Review orders that were cancelled and their returned inventory.</p></div><button class="admin-outline-button" id="clear-cancelled-filter" type="button">↻ Refresh cancelled</button></div>
+        <section class="admin-dashboard-card admin-table-card"><div class="cancelled-summary"><span>⊘</span><div><strong id="cancelled-count-large">0</strong><small>cancelled orders archived</small></div><p>Items from these orders are returned to inventory automatically.</p></div><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Cancelled</th><th>Returned</th><th></th></tr></thead><tbody id="cancelled-orders-body"></tbody></table></div><div class="admin-table-footer" id="cancelled-footer">Showing 0 cancelled orders</div></section>
+      </section>
+
+      <section class="admin-panel" data-panel="sales">
+        <div class="admin-page-heading"><div><p class="admin-kicker">REPORTS & INSIGHTS</p><h1>Simple <em>Sales.</em></h1><p>See the patterns behind every good cup.</p></div><button class="admin-gold-button" id="download-sales" type="button">↓ Download report</button></div>
+        <div class="admin-sales-cards"><article><span>💰</span><p>Gross sales</p><strong id="sales-total">₱18,420</strong><small>This week</small></article><article><span>🧾</span><p>Average order</p><strong>₱165</strong><small>Per completed order</small></article><article><span>☕</span><p>Best seller</p><strong>Spanish Latte</strong><small>28 cups this week</small></article></div><section class="admin-dashboard-card sales-note"><span>✦</span><div><h2>Nice work, team.</h2><p>Sales are pacing ahead of last week. Keep an eye on Matcha and oat milk before the afternoon rush.</p></div></section>
+      </section>
+    </main>
+  </div>
+  <dialog class="admin-form-dialog" id="product-dialog" aria-labelledby="product-dialog-title">
+    <form id="product-form">
+      <div class="admin-dialog-heading"><div><p class="admin-card-kicker">CATALOG MANAGEMENT</p><h2 id="product-dialog-title">Add product</h2></div><button class="customer-modal-close" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <div class="admin-form-grid">
+        <label class="admin-form-field admin-form-wide">Product name<input name="name" required maxlength="120"></label>
+        <label class="admin-form-field">Category<select name="categoryId" id="product-category" required></select></label>
+        <label class="admin-form-field">Price (₱)<input name="price" type="number" min="0" step="0.01" required></label>
+        <label class="admin-form-field">Icon / emoji<input name="emoji" maxlength="8" value="☕"></label>
+        <label class="admin-form-field">Image URL<input name="image" type="text" maxlength="1000"></label>
+        <label class="admin-form-field admin-form-wide">Description<textarea name="description" rows="3" maxlength="600"></textarea></label>
+        <label class="admin-form-check"><input name="hasSizes" type="checkbox"> Offer Small, Medium, and Large sizes</label>
+        <label class="admin-form-check"><input name="isFeatured" type="checkbox"> Feature this product</label>
+        <label class="admin-form-check"><input name="isAvailable" type="checkbox" checked> Available for sale</label>
+      </div>
+      <p class="admin-form-error" id="product-form-error" role="alert"></p>
+      <div class="admin-dialog-actions"><button class="admin-outline-button" type="button" data-close-dialog>Cancel</button><button class="admin-gold-button" type="submit">Save product</button></div>
+    </form>
+  </dialog>
+  <dialog class="admin-form-dialog" id="ingredient-dialog" aria-labelledby="ingredient-dialog-title">
+    <form id="ingredient-form">
+      <div class="admin-dialog-heading"><div><p class="admin-card-kicker">INVENTORY MANAGEMENT</p><h2 id="ingredient-dialog-title">Add ingredient</h2></div><button class="customer-modal-close" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <div class="admin-form-grid">
+        <label class="admin-form-field admin-form-wide">Ingredient name<input name="name" required maxlength="120"></label>
+        <label class="admin-form-field">Category<input name="category" maxlength="60" value="Other Supplies"></label>
+        <label class="admin-form-field">Unit<input name="unit" maxlength="20" value="pcs" required></label>
+        <label class="admin-form-field" id="ingredient-initial-stock-field">Opening stock<input name="stockQty" type="number" min="0" step="0.01" value="0"></label>
+        <label class="admin-form-field">Low-stock level<input name="lowStockThreshold" type="number" min="0" step="0.01" value="0"></label>
+        <label class="admin-form-field">Cost per unit (₱)<input name="costPerUnit" type="number" min="0" step="0.01" value="0"></label>
+        <label class="admin-form-field">Expiry date<input name="expiryDate" type="date"></label>
+      </div>
+      <p class="admin-form-error" id="ingredient-form-error" role="alert"></p>
+      <div class="admin-dialog-actions"><button class="admin-outline-button" type="button" data-close-dialog>Cancel</button><button class="admin-gold-button" type="submit">Save ingredient</button></div>
+    </form>
+  </dialog>
+  <dialog class="admin-form-dialog" id="stock-dialog" aria-labelledby="stock-dialog-title">
+    <form id="stock-form">
+      <div class="admin-dialog-heading"><div><p class="admin-card-kicker">INVENTORY MOVEMENT</p><h2 id="stock-dialog-title">Adjust stock</h2></div><button class="customer-modal-close" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <p class="admin-stock-current" id="stock-current"></p>
+      <div class="admin-form-grid">
+        <label class="admin-form-field">Movement<select name="type"><option value="in">Stock received</option><option value="out">Stock removed</option><option value="waste">Waste</option><option value="adjustment">Set exact stock</option></select></label>
+        <label class="admin-form-field">Quantity<input name="quantity" type="number" min="0.01" step="0.01" required></label>
+        <label class="admin-form-field admin-form-wide">Note<input name="note" maxlength="300" placeholder="Optional reason or reference"></label>
+      </div>
+      <p class="admin-form-error" id="stock-form-error" role="alert"></p>
+      <div class="admin-dialog-actions"><button class="admin-outline-button" type="button" data-close-dialog>Cancel</button><button class="admin-gold-button" type="submit">Save adjustment</button></div>
+    </form>
+  </dialog>
+  <dialog class="admin-form-dialog" id="cashier-dialog" aria-labelledby="cashier-dialog-title">
+    <form id="cashier-form">
+      <div class="admin-dialog-heading"><div><p class="admin-card-kicker">TEAM ACCESS</p><h2 id="cashier-dialog-title">Add cashier</h2></div><button class="customer-modal-close" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <div class="admin-form-grid">
+        <label class="admin-form-field admin-form-wide">Full name<input name="fullName" required maxlength="120"></label>
+        <label class="admin-form-field">Username<input name="username" required maxlength="40" autocomplete="off"></label>
+        <label class="admin-form-field">Email<input name="email" type="email" required maxlength="160"></label>
+        <label class="admin-form-field">Contact number<input name="contact" maxlength="40"></label>
+        <label class="admin-form-field" id="cashier-password-field">Temporary password<input name="password" type="password" minlength="8" autocomplete="new-password"></label>
+        <label class="admin-form-field" id="cashier-confirm-field">Confirm password<input name="confirmPassword" type="password" minlength="8" autocomplete="new-password"></label>
+        <label class="admin-form-field admin-form-wide" id="cashier-status-field" hidden>Account status<select name="isActive"><option value="1">Active</option><option value="0">Inactive</option></select></label>
+      </div>
+      <p class="admin-form-error" id="cashier-form-error" role="alert"></p>
+      <div class="admin-dialog-actions"><button class="admin-outline-button" type="button" data-close-dialog>Cancel</button><button class="admin-gold-button" type="submit">Create account</button></div>
+    </form>
+  </dialog>
+  <dialog class="admin-form-dialog admin-password-dialog" id="temporary-password-dialog" aria-labelledby="temporary-password-title">
+    <div class="admin-dialog-heading"><div><p class="admin-card-kicker">SECURE HANDOFF</p><h2 id="temporary-password-title">Temporary password</h2></div><button class="customer-modal-close" type="button" data-close-dialog aria-label="Close">×</button></div>
+    <p>Share this password securely. The cashier will be required to choose a new password at next sign-in.</p>
+    <div class="admin-temporary-password"><code id="temporary-password-value"></code><button class="admin-outline-button" type="button" id="copy-temporary-password">Copy</button></div>
+    <div class="admin-dialog-actions"><button class="admin-gold-button" type="button" data-close-dialog>Done</button></div>
+  </dialog>
+  <div class="customer-modal-backdrop" id="customer-modal-backdrop" hidden></div>
+  <section class="customer-modal" id="customer-modal" role="dialog" aria-modal="true" aria-labelledby="customer-modal-title" aria-hidden="true"><button class="customer-modal-close" id="customer-modal-close" type="button" aria-label="Close customer details">×</button><div class="customer-modal-qr"><img id="customer-qr-image" alt="Customer loyalty QR code"><div class="qr-fallback" id="customer-qr-fallback" aria-hidden="true"></div><span>Scan at the counter</span></div><div class="customer-modal-copy"><p class="admin-card-kicker">TRIPPERS CIRCLE MEMBER</p><h2 id="customer-modal-title">Customer name</h2><p id="customer-modal-email"></p><div class="customer-modal-card-id"><span>Card ID</span><strong id="customer-modal-card">TC-0000</strong></div><p class="customer-modal-card-status" id="customer-modal-card-status"></p><p class="customer-modal-card-style" id="customer-modal-card-style"></p><div class="customer-modal-stats"><span><b id="customer-modal-points">0</b><small>Points</small></span><span><b id="customer-modal-tier">Member</b><small>Tier</small></span><span><b id="customer-modal-orders">0</b><small>Orders</small></span></div><button class="admin-gold-button" id="customer-modal-close-action" type="button">Done <span>→</span></button></div></section>
+  <div class="admin-toast" id="admin-toast" role="status" aria-live="polite"><span>✓</span><span id="admin-toast-message">Saved</span></div>
+</body>
+</html>

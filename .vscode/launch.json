@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Open Trippers POS",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://localhost:4173",
+      "preLaunchTask": "Start Trippers server"
+    }
+  ]
+}

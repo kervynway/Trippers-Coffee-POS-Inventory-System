@@ -1,0 +1,126 @@
+/* Trippers Coffee · customer order-ahead layer (built on the POS design system) */
+
+/* Menu cards read as photos, not icons */
+.menu-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.menu-item { min-height: 206px; }
+.item-art { height: 112px; }
+.item-art img { background: #dfeade; }
+.item-body small { display: -webkit-box; min-height: 22px; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.item-price { letter-spacing: .01em; }
+
+/* Sidebar profile link */
+.profile-menu-link { margin-left: auto; padding: 6px 0 6px 5px; color: #7fa08c; font-size: 12px; letter-spacing: 2px; }
+.profile-menu-link:hover { color: #b7ddbb; }
+
+/* Customer-facing page footer */
+.home-footer { margin: 26px 0 0; color: #93a099; font-size: 9px; letter-spacing: .04em; text-align: center; }
+.home-footer a { color: var(--green-700); font-weight: 700; }
+.home-footer a:hover { color: var(--green-600); }
+
+/* Info modals (order history + loyalty) */
+.info-modal { position: fixed; z-index: 70; top: 50%; left: 50%; width: min(560px, calc(100% - 32px)); max-height: calc(100vh - 38px); overflow: auto; opacity: 0; pointer-events: none; transform: translate(-50%, -47%) scale(.98); transition: opacity .25s, transform .25s; }
+.info-modal.is-open { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1); }
+.info-modal-body { padding: 34px 32px 30px; }
+.info-modal-body h2 { margin: 0 0 9px; font-family: var(--display); font-size: 27px; font-weight: 600; letter-spacing: -.05em; line-height: 1.05; }
+.info-modal-body h2 em { color: var(--green-700); font-style: normal; }
+.info-modal-copy { margin: 0 0 20px; color: #7d8a82; font-size: 11px; line-height: 1.6; }
+
+.info-modal .modal-close-button { background: var(--surface); }
+
+.history-list { display: grid; gap: 8px; max-height: 52vh; overflow: auto; }
+.history-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 11px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfa; }
+.history-row > span:first-child { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 7px; color: var(--green-800); background: var(--green-50); font-size: 16px; }
+.history-copy { min-width: 0; }
+.history-copy strong, .history-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-copy strong { color: var(--ink); font-family: var(--display); font-size: 11px; font-weight: 600; }
+.history-copy small { margin-top: 2px; color: #97a29b; font-size: 8px; }
+.history-total { color: var(--green-800); font-family: var(--mono); font-size: 10px; font-weight: 500; }
+.history-status { padding: 4px 6px; border-radius: 3px; color: #4e8a5c; background: var(--green-50); font-size: 7px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.history-status.cancelled { color: #a75b4c; background: var(--coral-soft); }
+.history-status.completed { color: #7c8b81; background: #eef1ec; }
+
+.loyalty-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 22px; }
+.loyalty-steps span { padding: 13px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfa; }
+.loyalty-steps b { display: block; margin-bottom: 7px; color: var(--green-600); font-family: var(--mono); font-size: 10px; font-weight: 500; }
+.loyalty-steps strong { display: block; color: var(--ink); font-size: 10px; font-weight: 700; }
+.loyalty-steps small { display: block; margin-top: 4px; color: #97a29b; font-size: 8px; line-height: 1.45; }
+.info-modal .primary-button { justify-content: center; gap: 10px; }
+
+/* Keep the order/meta line on one line inside the amount card */
+.payment-total-card > small span { display: inline; color: inherit; font-size: inherit; font-weight: inherit; letter-spacing: 0; text-transform: none; }
+
+/* Fill the customizer art without letting a portrait photo stretch the dialog */
+.customizer-art { position: relative; overflow: hidden; }
+.customizer-art img,
+.customizer-art-fallback { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; }
+.customizer-art-fallback { display: grid; place-items: center; }
+
+/* Dark theme touch-ups for pieces the POS never used */
+html[data-theme="dark"] body[data-page="pos"] .item-price,
+html[data-theme="dark"] body[data-page="pos"] .history-total { color: #8fd8a8; }
+html[data-theme="dark"] body[data-page="pos"] .summary-line { color: #93a89a; }
+html[data-theme="dark"] body[data-page="pos"] .summary-line strong,
+html[data-theme="dark"] body[data-page="pos"] .order-item-price { color: #bdd0c1; }
+html[data-theme="dark"] body[data-page="pos"] .metric-card > div:nth-child(2) > span,
+html[data-theme="dark"] body[data-page="pos"] .metric-card small { color: #9db1a3; }
+html[data-theme="dark"] body[data-page="pos"] .field-label { color: #9db1a3; }
+html[data-theme="dark"] body[data-page="pos"] .recent-order-copy strong,
+html[data-theme="dark"] body[data-page="pos"] .recent-order-total { color: #bdd0c1; }
+html[data-theme="dark"] body[data-page="pos"] .charge-button:disabled { color: #7f9488; background: #22362a; }
+html[data-theme="dark"] body[data-page="pos"] .option-button.selected { color: #c6ecd2; border-color: #3f7d5a; background: #214233; box-shadow: inset 0 0 0 1px #3a6b50; }
+html[data-theme="dark"] body[data-page="pos"] .payment-method strong { color: var(--ink-soft); }
+html[data-theme="dark"] body[data-page="pos"] .payment-method small { color: #93a89a; }
+html[data-theme="dark"] body[data-page="pos"] .payment-method-icon { color: #8fd8a8; background: #214c39; }
+html[data-theme="dark"] body[data-page="pos"] .receipt-number strong { color: #8fd8a8; }
+html[data-theme="dark"] body[data-page="pos"] .payment-success > p:not(.panel-kicker) { color: #a4b6a9; }
+html[data-theme="dark"] body[data-page="pos"] .item-body small,
+html[data-theme="dark"] body[data-page="pos"] .order-item-copy small,
+html[data-theme="dark"] body[data-page="pos"] .info-modal-copy,
+html[data-theme="dark"] body[data-page="pos"] .loyalty-steps small { color: #93a89a; }
+html[data-theme="dark"] body[data-page="pos"] .item-art img { background: #1a3024; }
+html[data-theme="dark"] body[data-page="pos"] .history-row,
+html[data-theme="dark"] body[data-page="pos"] .loyalty-steps span { border-color: var(--line); background: #1a3024; }
+html[data-theme="dark"] body[data-page="pos"] .history-status.completed { color: #aab8ae; background: #22362a; }
+html[data-theme="dark"] body[data-page="pos"] .payment-detail { background: #1a3024; }
+html[data-theme="dark"] body[data-page="pos"] .payment-detail p,
+html[data-theme="dark"] body[data-page="pos"] .payment-detail-row { color: #a8bcae; }
+html[data-theme="dark"] body[data-page="pos"] .payment-detail input { border-color: var(--line); background: #14251c; color: var(--ink); }
+html[data-theme="dark"] body[data-page="pos"] .menu-search kbd { border-color: var(--line); color: #94aa9c; background: #14251c; }
+html[data-theme="dark"] body[data-page="pos"] .item-art-fallback { background: radial-gradient(circle at 50% 35%, rgba(255,255,255,.12), transparent 30%), linear-gradient(135deg, #214c39, #174d35); }
+html[data-theme="dark"] body[data-page="pos"] .customizer-art { background: linear-gradient(145deg, #214c39, #174d35); }
+html[data-theme="dark"] body[data-page="pos"] .customizer-art-fallback { background: radial-gradient(circle at 50% 35%, rgba(255,255,255,.14), transparent 29%), linear-gradient(145deg, #214c39, #174d35); }
+html[data-theme="dark"] body[data-page="pos"] .quantity-stepper { background: #1a3024; }
+html[data-theme="dark"] body[data-page="pos"] .order-item { border-bottom-color: var(--line); }
+html[data-theme="dark"] body[data-page="pos"] .recent-order { border-bottom-color: var(--line); }
+html[data-theme="dark"] body[data-page="pos"] .home-footer { color: #8ca696; }
+
+@media (max-width: 1250px) {
+  .menu-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .loyalty-steps { grid-template-columns: 1fr; }
+  .info-modal-body { padding: 28px 20px 24px; }
+  .history-row { grid-template-columns: 30px minmax(0, 1fr) auto; }
+  .history-row .history-status { display: none; }
+}
+
+.recent-order-status.cancelled { color: #a75b4c; background: var(--coral-soft); }
+.recent-order-status.completed { color: #a56d29; background: var(--gold-soft); }
+
+.charge-button { gap: 10px; }
+.charge-button > span:first-child { margin-right: auto; }
+.charge-button .charge-arrow { margin-left: 0; padding-left: 0; }
+
+html[data-theme="dark"] body[data-page="pos"] .recent-order-status.completed { color: #e0b85e; background: var(--gold-soft); }
+
+/* Receipt printing: only the confirmation panel */
+@media print {
+  body > * { display: none !important; }
+  body > #payment-modal { display: block !important; position: static; width: 100%; max-height: none; border: 0; box-shadow: none; opacity: 1; transform: none; }
+  #payment-modal .modal-close-button,
+  #payment-modal #payment-view { display: none !important; }
+  #payment-modal #payment-success { display: block !important; }
+  #payment-modal #payment-success .success-actions { display: none !important; }
+}
+
