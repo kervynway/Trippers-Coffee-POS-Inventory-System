@@ -1,0 +1,15 @@
+[
+  {
+    "id": "acc_2f044d1b903c9721",
+    "role": "admin",
+    "fullName": "Trippers Admin",
+    "username": "admin",
+    "email": "admin@tripperscoffee.com",
+    "contact": "",
+    "status": "Active",
+    "passwordHash": "scrypt$7e97da9c1bc4c4fda5a0caee5886cce3$4e1f19f304594750aeb3b0a82d57e2832cf17e5ce5fb73071a81eeb9b2bb9fa01bde1f8d6b6b2fe0f5e9845c9f52127e4df165f77d1c8f4f3c6b3c37bdcc2615",
+    "createdAt": "2026-11-05T04:29:41.722Z",
+    "updatedAt": "2026-11-05T04:29:41.722Z",
+    "lastLoginAt": null
+  }
+]
