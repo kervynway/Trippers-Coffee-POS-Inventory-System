@@ -4,7 +4,9 @@
   "private": true,
   "description": "Trippers Coffee storefront, cart, and management dashboard demo",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "db:init": "node server/init-db.js",
+    "db:seed": "node server/seed.js"
   },
   "dependencies": {
     "mysql2": "^3.24.6"
