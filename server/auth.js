@@ -3,61 +3,195 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { get, all, run, getSetting, setSetting } = require("./db");
+const { get, run, nowISO, logActivity, getSetting } = require("./db");
+const { parseCookies, serializeCookie, clientIP } = require("./http");
 
+const COOKIE_NAME = "trippers_session";
 const dataDir = path.join(__dirname, "..", "data");
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-
-const setupTokenFile = path.join(dataDir, "setup-token.txt");
-
-function getSetupToken() {
-  let token = getSetting("setup_token");
-  if (!token) {
-    token = crypto.randomBytes(16).toString("hex");
-    setSetting("setup_token", token);
-  }
-  fs.writeFileSync(setupTokenFile, token, "utf8");
-  return token;
-}
-
-function rotateSetupToken() {
-  const token = crypto.randomBytes(16).toString("hex");
-  setSetting("setup_token", token);
-  fs.writeFileSync(setupTokenFile, token, "utf8");
-  return token;
-}
-
-function verifySetupToken(token) {
-  const current = getSetting("setup_token");
-  return current && token && crypto.timingSafeEqual(Buffer.from(current), Buffer.from(token));
-}
-
-function isInitialized() {
-  return getSetting("setup_complete") === "1";
-}
-
-function completeSetup() {
-  setSetting("setup_complete", "1");
-}
+fs.mkdirSync(dataDir, { recursive: true });
+const setupTokenPath = path.join(dataDir, "setup-token.txt");
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return `${salt}:${hash}`;
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return `scrypt$${salt}$${hash}`;
 }
 
 function verifyPassword(password, stored) {
-  if (!stored || !stored.includes(":")) return false;
-  const [salt, key] = stored.split(":");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return crypto.timingSafeEqual(Buffer.from(key), Buffer.from(hash));
+  if (typeof password !== "string" || typeof stored !== "string") return false;
+
+  let salt;
+  let hash;
+  if (stored.startsWith("scrypt$")) {
+    const parts = stored.split("$");
+    if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+    salt = parts[1];
+    hash = parts[2];
+  } else if (stored.includes(":")) {
+    const separator = stored.indexOf(":");
+    salt = stored.slice(0, separator);
+    hash = stored.slice(separator + 1);
+  } else {
+    return false;
+  }
+
+  if (!salt || !hash || !/^[0-9a-f]+$/i.test(hash)) return false;
+
+  try {
+    const expected = Buffer.from(hash, "hex");
+    if (!expected.length) return false;
+    const candidate = crypto.scryptSync(password, salt, expected.length);
+    return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+  } catch {
+    return false;
+  }
 }
 
 function validatePassword(password) {
   if (typeof password !== "string" || password.length < 8) {
     return "Password must be at least 8 characters long.";
   }
+  if (password.length > 200) return "Password is too long.";
+  if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    return "Password must include at least one letter and one number.";
+  }
   return null;
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+async function sessionMinutes(remember) {
+  const fallback = remember ? 60 * 24 * 30 : 720;
+  const configured = Number(await getSetting("session_timeout_minutes", "720"));
+  if (!remember && Number.isFinite(configured) && configured > 0) return configured;
+  return fallback;
+}
+
+async function createSession(req, res, user, remember = false) {
+  const token = crypto.randomBytes(32).toString("hex");
+  const id = crypto.randomUUID();
+  const minutes = await sessionMinutes(remember);
+  const expires = new Date(Date.now() + minutes * 60 * 1000);
+
+  await run(
+    "INSERT INTO sessions (id, user_id, token_hash, ip, user_agent, remember, expires_at, created_at) VALUES (?,?,?,?,?,?,?,?)",
+    id, user.id, sha256(token), clientIP(req), String(req.headers["user-agent"] || "").slice(0, 300),
+    remember ? 1 : 0, expires.toISOString(), nowISO()
+  );
+
+  res.setHeader("Set-Cookie", serializeCookie(COOKIE_NAME, token, {
+    maxAge: minutes * 60,
+    expires,
+    secure: process.env.TRIPPERS_SECURE_COOKIES === "1"
+  }));
+  return { token, expires };
+}
+
+async function findSession(req) {
+  const cookies = parseCookies(req.headers.cookie);
+  const token = cookies[COOKIE_NAME];
+  if (!token) return null;
+
+  const row = await get(
+    `SELECT s.id AS session_id, s.expires_at, u.id, u.full_name, u.username, u.email, u.contact,
+            u.password_hash, u.role, u.status, u.must_change_password, u.last_login_at, u.created_at
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ?`,
+    sha256(token)
+  );
+  if (!row) return null;
+
+  const expiresAt = new Date(row.expires_at).getTime();
+  if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) {
+    await run("DELETE FROM sessions WHERE id = ?", row.session_id);
+    return null;
+  }
+  if (row.status !== "active") return null;
+  return row;
+}
+
+function clearSessionCookie(res) {
+  res.setHeader("Set-Cookie", serializeCookie(COOKIE_NAME, "", { maxAge: 0 }));
+}
+
+async function destroySession(req, res) {
+  const cookies = parseCookies(req.headers.cookie);
+  const token = cookies[COOKIE_NAME];
+  if (token) await run("DELETE FROM sessions WHERE token_hash = ?", sha256(token));
+  clearSessionCookie(res);
+}
+
+async function cleanupSessions() {
+  await run("DELETE FROM sessions WHERE expires_at < ?", nowISO());
+}
+
+async function recentFailures(identifier, ip) {
+  const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  const row = await get(
+    "SELECT COUNT(*) AS n FROM login_attempts WHERE success = 0 AND created_at >= ? AND (identifier = ? OR ip = ?)",
+    since, identifier, ip
+  );
+  return row ? Number(row.n) : 0;
+}
+
+async function recordAttempt(identifier, ip, success) {
+  await run(
+    "INSERT INTO login_attempts (identifier, ip, success, created_at) VALUES (?,?,?,?)",
+    identifier, ip, success ? 1 : 0, nowISO()
+  );
+  try {
+    await run("DELETE FROM login_attempts WHERE created_at < ?", new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString());
+  } catch {}
+}
+
+async function adminCount() {
+  const row = await get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'");
+  return row ? Number(row.n) : 0;
+}
+
+async function isInitialized() {
+  return (await adminCount()) > 0;
+}
+
+function getSetupToken() {
+  if (fs.existsSync(setupTokenPath)) {
+    const existing = fs.readFileSync(setupTokenPath, "utf8").trim();
+    if (existing) return existing;
+  }
+  const token = crypto.randomBytes(24).toString("hex");
+  fs.writeFileSync(setupTokenPath, token, { mode: 0o600 });
+  return token;
+}
+
+function rotateSetupToken() {
+  const token = crypto.randomBytes(24).toString("hex");
+  fs.writeFileSync(setupTokenPath, token, { mode: 0o600 });
+  return token;
+}
+
+function verifySetupToken(candidate) {
+  if (!candidate) return false;
+  const expected = getSetupToken();
+  const a = Buffer.from(String(candidate));
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function completeSetup() {
+  try {
+    fs.unlinkSync(setupTokenPath);
+  } catch {}
+}
+
+function canAccessAdmin(user) {
+  return Boolean(user && user.role === "admin");
+}
+
+function canAccessCashier(user) {
+  return Boolean(user && (user.role === "cashier" || user.role === "admin"));
 }
 
 function publicUser(user) {
@@ -70,89 +204,32 @@ function publicUser(user) {
     contact: user.contact,
     role: user.role,
     status: user.status,
-    mustChangePassword: Boolean(user.must_change_password)
+    mustChangePassword: Boolean(user.must_change_password),
+    lastLoginAt: user.last_login_at,
+    createdAt: user.created_at
   };
 }
 
-function clientIP(req) {
-  return req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
-}
-
-function createSession(req, res, user, remember = false) {
-  const sessionId = crypto.randomBytes(32).toString("hex");
-  const token = crypto.randomBytes(32).toString("hex");
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-  const days = remember ? 30 : 1;
-  const expiresAt = new Date(Date.now() + days * 86400000).toISOString();
-  
-  run(
-    "INSERT INTO sessions (id, user_id, token_hash, ip, user_agent, remember, expires_at, created_at) VALUES (?,?,?,?,?,?,?,?)",
-    sessionId, user.id, tokenHash, clientIP(req), req.headers["user-agent"] || "", remember ? 1 : 0, expiresAt, new Date().toISOString()
-  );
-
-  const cookieOptions = [
-    `trp_session=${sessionId}.${token}`,
-    "HttpOnly",
-    "SameSite=Lax",
-    `Max-Age=${days * 86400}`,
-    "Path=/"
-  ];
-  res.setHeader("Set-Cookie", cookieOptions.join("; "));
-}
-
-function findSession(req) {
-  const cookieHeader = req.headers.cookie;
-  if (!cookieHeader) return null;
-  const match = cookieHeader.split(";").map(c => c.trim()).find(c => c.startsWith("trp_session="));
-  if (!match) return null;
-  const val = match.substring("trp_session=".length);
-  const [sessionId, token] = val.split(".");
-  if (!sessionId || !token) return null;
-
-  const session = get("SELECT * FROM sessions WHERE id = ? AND expires_at > datetime('now')", sessionId);
-  if (!session) return null;
-
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-  if (!crypto.timingSafeEqual(Buffer.from(session.token_hash), Buffer.from(tokenHash))) return null;
-
-  return get("SELECT * FROM users WHERE id = ? AND status = 'active'", session.user_id);
-}
-
-function destroySession(req, res) {
-  const cookieHeader = req.headers.cookie;
-  if (cookieHeader) {
-    const match = cookieHeader.split(";").map(c => c.trim()).find(c => c.startsWith("trp_session="));
-    if (match) {
-      const val = match.substring("trp_session=".length);
-      const [sessionId] = val.split(".");
-      if (sessionId) run("DELETE FROM sessions WHERE id = ?", sessionId);
-    }
-  }
-  res.setHeader("Set-Cookie", "trp_session=; HttpOnly; SameSite=Lax; Max-Age=0; Path=/");
-}
-
-function recordAttempt(identifier, ip, success) {
-  run("INSERT INTO login_attempts (identifier, ip, success, created_at) VALUES (?,?,?,?)", identifier, ip, success ? 1 : 0, new Date().toISOString());
-}
-
-function recentFailures(identifier, ip) {
-  const row = get("SELECT COUNT(*) AS count FROM login_attempts WHERE (identifier = ? OR ip = ?) AND success = 0 AND created_at >= datetime('now', '-15 minutes')", identifier, ip);
-  return row ? row.count : 0;
-}
-
 module.exports = {
-  getSetupToken,
-  rotateSetupToken,
-  verifySetupToken,
-  isInitialized,
-  completeSetup,
+  COOKIE_NAME,
   hashPassword,
   verifyPassword,
   validatePassword,
-  publicUser,
   createSession,
   findSession,
   destroySession,
+  clearSessionCookie,
+  cleanupSessions,
+  recentFailures,
   recordAttempt,
-  recentFailures
+  canAccessAdmin,
+  canAccessCashier,
+  publicUser,
+  isInitialized,
+  adminCount,
+  getSetupToken,
+  rotateSetupToken,
+  verifySetupToken,
+  completeSetup,
+  logActivity
 };

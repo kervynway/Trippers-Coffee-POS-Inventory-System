@@ -4,7 +4,9 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { handleApi } = require("./server/api");
-const { isInitialized, getSetupToken, findSession } = require("./server/auth");
+const { initDb, closeDb } = require("./server/db");
+const { seed } = require("./server/seed");
+const { isInitialized, getSetupToken, findSession, cleanupSessions } = require("./server/auth");
 
 const root = __dirname;
 const port = Number(process.env.PORT) || 4173;
@@ -28,7 +30,7 @@ const mimeTypes = {
   ".txt": "text/plain; charset=utf-8"
 };
 
-const BLOCKED_PREFIXES = ["/server", "/data", "/.vscode", "/.git", "/node_modules"];
+const BLOCKED_PREFIXES = ["/server", "/data", "/.vscode", "/.git", "/node_modules", "/backups", "/database"];
 const BLOCKED_FILES = new Set([
   "/server.js", "/package.json", "/package-lock.json", "/README.md", "/desktop.ini"
 ]);
@@ -49,7 +51,7 @@ const SECURITY_HEADERS = {
   ].join("; ")
 };
 
-const server = http.createServer((request, response) => {
+async function handleRequest(request, response) {
   let pathname;
   try {
     pathname = decodeURIComponent(new URL(request.url, `http://${request.headers.host || "localhost"}`).pathname);
@@ -60,7 +62,7 @@ const server = http.createServer((request, response) => {
   }
 
   if (pathname.startsWith("/api/")) {
-    handleApi(request, response);
+    await handleApi(request, response);
     return;
   }
 
@@ -76,12 +78,12 @@ const server = http.createServer((request, response) => {
 
   const protectedPage = pathname === "/pos.html" || pathname.startsWith("/admin/") && pathname.endsWith(".html");
   if (protectedPage) {
-    const user = findSession(request);
-    if (!isInitialized()) {
+    if (!(await isInitialized())) {
       response.writeHead(302, { Location: "/index.html#setup", "Cache-Control": "no-store" });
       response.end();
       return;
     }
+    const user = await findSession(request);
     if (!user) {
       response.writeHead(302, { Location: "/index.html", "Cache-Control": "no-store" });
       response.end();
@@ -124,45 +126,77 @@ const server = http.createServer((request, response) => {
     return;
   }
 
-  fs.stat(filePath, (statError, stats) => {
-    if (statError || !stats.isFile()) {
-      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("Not found");
+  let stats;
+  try {
+    stats = await fs.promises.stat(filePath);
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+    return;
+  }
+  if (!stats.isFile()) {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+    return;
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  if (!mimeTypes[ext]) {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+    return;
+  }
+
+  response.writeHead(200, {
+    "Content-Type": mimeTypes[ext],
+    "Content-Length": stats.size,
+    "Cache-Control": "no-cache"
+  });
+  const stream = fs.createReadStream(filePath);
+  stream.on("error", () => response.destroy());
+  stream.pipe(response);
+}
+
+const server = http.createServer((request, response) => {
+  handleRequest(request, response).catch((error) => {
+    console.error("Request failed:", error);
+    if (!response.headersSent) {
+      response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Server error");
       return;
     }
-
-    const ext = path.extname(filePath).toLowerCase();
-    if (!mimeTypes[ext]) {
-      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("Not found");
-      return;
-    }
-
-    response.writeHead(200, {
-      "Content-Type": mimeTypes[ext],
-      "Content-Length": stats.size,
-      "Cache-Control": "no-cache"
-    });
-    fs.createReadStream(filePath).pipe(response);
+    response.end();
   });
 });
 
-server.listen(port, "127.0.0.1", () => {
-  console.log("");
-  console.log("  TRIPPERS COFFEE · POS & Management System");
-  console.log(`  Running at http://localhost:${port}`);
-  console.log("");
-  if (!isInitialized()) {
-    const token = getSetupToken();
-    console.log("  FIRST-TIME SETUP REQUIRED");
-    console.log("  Open http://localhost:" + port + "/login.html#setup");
-    console.log("  One-time setup token: " + token);
-    console.log("  (also saved to data/setup-token.txt)");
-    console.log("");
+async function start() {
+  try {
+    await initDb();
+    await seed();
+    await cleanupSessions();
+    const initialized = await isInitialized();
+    server.listen(port, "127.0.0.1", () => {
+      console.log("");
+      console.log("  TRIPPERS COFFEE · POS & Management System");
+      console.log(`  Running at http://localhost:${port}`);
+      console.log("");
+      if (!initialized) {
+        const token = getSetupToken();
+        console.log("  FIRST-TIME SETUP REQUIRED");
+        console.log("  Open http://localhost:" + port + "/login.html#setup");
+        console.log("  One-time setup token: " + token);
+        console.log("  (also saved to data/setup-token.txt)");
+        console.log("");
+      }
+      console.log("  Press Ctrl+C to stop.");
+      console.log("");
+    });
+  } catch (error) {
+    console.error("Startup failed:", error);
+    await closeDb().catch(() => {});
+    process.exit(1);
   }
-  console.log("  Press Ctrl+C to stop.");
-  console.log("");
-});
+}
 
 server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {
@@ -171,3 +205,5 @@ server.on("error", (error) => {
   }
   throw error;
 });
+
+start();

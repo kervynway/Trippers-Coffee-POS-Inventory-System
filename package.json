@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "db:init": "node server/init-db.js",
-    "db:seed": "node server/seed.js"
+    "db:seed": "node server/seed.js",
+    "db:seed-demo": "node server/seed-demo.js",
+    "db:migrate": "node server/migrate.js"
   },
   "dependencies": {
     "mysql2": "^3.24.6"

@@ -57,7 +57,13 @@ async function handleApi(req, res) {
     return sendError(res, 403, "Cross-origin request blocked.");
   }
 
-  const user = findSession(req);
+  let user;
+  try {
+    user = await findSession(req);
+  } catch (error) {
+    console.error("[api] session lookup failed:", error);
+    return sendError(res, 500, "Something went wrong on the server.");
+  }
   const { route: r, params } = match;
 
   if (r.guard !== "public") {
@@ -101,7 +107,9 @@ function fail(status, message) {
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-const SYMBOL = () => getSetting("currency_symbol", "₱");
+async function SYMBOL() {
+  return getSetting("currency_symbol", "₱");
+}
 
 function parseJSON(value, fallback) {
   try { return JSON.parse(value); } catch { return fallback; }
@@ -190,7 +198,7 @@ function rangeLabel(start, end) {
   return start === end ? fmt(start) : `${fmt(start)} – ${fmt(end)}`;
 }
 
-function salesBetween(start, end) {
+async function salesBetween(start, end) {
   return get(
     `SELECT COALESCE(SUM(total),0) AS revenue,
             COALESCE(SUM(discount),0) AS discounts,
@@ -202,7 +210,7 @@ function salesBetween(start, end) {
   );
 }
 
-function orderListQuery(where, params, limit = 200) {
+async function orderListQuery(where, params, limit = 200) {
   return all(
     `SELECT o.*, c.contact AS customer_contact
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
@@ -212,15 +220,16 @@ function orderListQuery(where, params, limit = 200) {
   );
 }
 
-function readOrder(id) {
-  const order = get("SELECT * FROM orders WHERE id = ?", id);
+async function readOrder(id) {
+  const order = await get("SELECT * FROM orders WHERE id = ?", id);
   if (!order) fail(404, "Order not found.");
-  order.items = all("SELECT * FROM order_items WHERE order_id = ? ORDER BY id", id).map((item) => ({
+  const items = await all("SELECT * FROM order_items WHERE order_id = ? ORDER BY id", id);
+  order.items = items.map((item) => ({
     ...item,
     addons: parseJSON(item.addons, [])
   }));
-  order.payment = get("SELECT * FROM payments WHERE order_id = ? ORDER BY id DESC LIMIT 1", id) || null;
-  order.refund = get("SELECT * FROM refunds WHERE order_id = ? ORDER BY id DESC LIMIT 1", id) || null;
+  order.payment = (await get("SELECT * FROM payments WHERE order_id = ? ORDER BY id DESC LIMIT 1", id)) || null;
+  order.refund = (await get("SELECT * FROM refunds WHERE order_id = ? ORDER BY id DESC LIMIT 1", id)) || null;
   return order;
 }
 
@@ -232,18 +241,18 @@ function publicOrder(order) {
   };
 }
 
-function taxRates() {
+async function taxRates() {
   return {
-    tax: Math.max(0, toNumber(getSetting("tax_rate", "0.12"), 0.12)),
-    service: Math.max(0, toNumber(getSetting("service_charge", "0"), 0))
+    tax: Math.max(0, toNumber(await getSetting("tax_rate", "0.12"), 0.12)),
+    service: Math.max(0, toNumber(await getSetting("service_charge", "0"), 0))
   };
 }
 
-function paymentMethods() {
-  return parseJSON(getSetting("payment_methods", '["Cash","GCash"]'), ["Cash", "GCash"]);
+async function paymentMethods() {
+  return parseJSON(await getSetting("payment_methods", '["Cash","GCash"]'), ["Cash", "GCash"]);
 }
 
-function buildLineItems(rawItems) {
+async function buildLineItems(rawItems) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) fail(400, "Add at least one item to the order.");
   if (rawItems.length > 60) fail(400, "Too many items in one order.");
   const lines = [];
@@ -252,14 +261,14 @@ function buildLineItems(rawItems) {
     const qty = Math.floor(toNumber(raw.quantity, 0));
     if (!Number.isInteger(productId) || productId <= 0) fail(400, "Invalid product in order.");
     if (qty < 1 || qty > 99) fail(400, "Item quantity must be between 1 and 99.");
-    const product = get("SELECT * FROM products WHERE id = ?", productId);
+    const product = await get("SELECT * FROM products WHERE id = ?", productId);
     if (!product) fail(400, "A product in your cart no longer exists.");
     if (!product.is_available) fail(400, `${product.name} is currently unavailable.`);
 
     let size = null;
     let sizeDelta = 0;
     if (product.has_sizes) {
-      const sizes = all("SELECT * FROM product_sizes WHERE product_id = ?", productId);
+      const sizes = await all("SELECT * FROM product_sizes WHERE product_id = ?", productId);
       const chosen = raw.size ? sizes.find((s) => s.name.toLowerCase() === String(raw.size).toLowerCase()) : sizes.find((s) => s.name === "Medium") || sizes[0];
       if (!chosen) fail(400, `Choose a valid size for ${product.name}.`);
       size = chosen.name;
@@ -269,7 +278,7 @@ function buildLineItems(rawItems) {
     const addonIds = Array.isArray(raw.addons) ? [...new Set(raw.addons.map(Number).filter(Boolean))] : [];
     const addonRows = [];
     if (addonIds.length) {
-      const valid = all("SELECT a.* FROM addons a JOIN product_addons pa ON pa.addon_id = a.id WHERE pa.product_id = ? AND a.is_active = 1", productId);
+      const valid = await all("SELECT a.* FROM addons a JOIN product_addons pa ON pa.addon_id = a.id WHERE pa.product_id = ? AND a.is_active = 1", productId);
       for (const id of addonIds) {
         const found = valid.find((a) => a.id === id);
         if (!found) fail(400, `An add-on selected for ${product.name} is unavailable.`);
@@ -278,10 +287,11 @@ function buildLineItems(rawItems) {
     }
     const addonTotal = addonRows.reduce((sum, a) => sum + a.price, 0);
     const unitPrice = round2(product.price + sizeDelta + addonTotal);
+    const category = await get("SELECT name FROM categories WHERE id = ?", product.category_id);
     lines.push({
       productId,
       productName: product.name,
-      categoryName: get("SELECT name FROM categories WHERE id = ?", product.category_id)?.name || "",
+      categoryName: category?.name || "",
       size: size || "",
       addons: addonRows,
       unitPrice,
@@ -293,13 +303,13 @@ function buildLineItems(rawItems) {
   return lines;
 }
 
-function computeTotals(subtotal, discountId, discountReference) {
-  const { tax: taxRate, service: serviceRate } = taxRates();
+async function computeTotals(subtotal, discountId, discountReference) {
+  const { tax: taxRate, service: serviceRate } = await taxRates();
   let discount = 0;
   let discountLabel = "";
   let discountRow = null;
   if (discountId) {
-    const row = get("SELECT * FROM discounts WHERE id = ? AND is_active = 1", Number(discountId));
+    const row = await get("SELECT * FROM discounts WHERE id = ? AND is_active = 1", Number(discountId));
     if (!row) fail(400, "That discount is not available.");
     if (row.requires_id && !sanitizeText(discountReference, 80)) {
       fail(400, `${row.name} requires a valid ID / reference number.`);
@@ -319,25 +329,25 @@ function computeTotals(subtotal, discountId, discountReference) {
   };
 }
 
-function newOrderNumber() {
+async function newOrderNumber() {
   const date = dateKey().replace(/-/g, "");
   const prefix = `TRP-${date}-`;
-  const last = get("SELECT order_number FROM orders WHERE order_number LIKE ? ORDER BY id DESC LIMIT 1", `${prefix}%`);
+  const last = await get("SELECT order_number FROM orders WHERE order_number LIKE ? ORDER BY id DESC LIMIT 1", `${prefix}%`);
   let next = 1;
   if (last) next = Number(last.order_number.slice(prefix.length)) + 1;
   return `${prefix}${String(next).padStart(4, "0")}`;
 }
 
-function deductStockForOrder(orderId, userId, userName) {
-  const order = get("SELECT * FROM orders WHERE id = ?", orderId);
+async function deductStockForOrder(orderId, userId, userName) {
+  const order = await get("SELECT * FROM orders WHERE id = ?", orderId);
   if (!order) fail(404, "Order not found.");
   if (order.stock_deducted) return { deducted: false, shortages: [] };
 
-  const items = all("SELECT * FROM order_items WHERE order_id = ?", orderId);
+  const items = await all("SELECT * FROM order_items WHERE order_id = ?", orderId);
   const needed = new Map();
   for (const item of items) {
     if (!item.product_id) continue;
-    const recipe = all("SELECT ingredient_id, quantity FROM product_recipes WHERE product_id = ?", item.product_id);
+    const recipe = await all("SELECT ingredient_id, quantity FROM product_recipes WHERE product_id = ?", item.product_id);
     for (const r of recipe) {
       needed.set(r.ingredient_id, (needed.get(r.ingredient_id) || 0) + r.quantity * item.quantity);
     }
@@ -345,7 +355,7 @@ function deductStockForOrder(orderId, userId, userName) {
 
   const shortages = [];
   for (const [ingredientId, qty] of needed) {
-    const ingredient = get("SELECT * FROM ingredients WHERE id = ?", ingredientId);
+    const ingredient = await get("SELECT * FROM ingredients WHERE id = ?", ingredientId);
     if (!ingredient) continue;
     if (ingredient.stock_qty < qty) {
       shortages.push({
@@ -361,25 +371,25 @@ function deductStockForOrder(orderId, userId, userName) {
   }
 
   for (const [ingredientId, qty] of needed) {
-    const ingredient = get("SELECT * FROM ingredients WHERE id = ?", ingredientId);
+    const ingredient = await get("SELECT * FROM ingredients WHERE id = ?", ingredientId);
     if (!ingredient) continue;
-    run("UPDATE ingredients SET stock_qty = stock_qty - ?, updated_at = ? WHERE id = ?", qty, nowISO(), ingredientId);
-    run(
+    await run("UPDATE ingredients SET stock_qty = stock_qty - ?, updated_at = ? WHERE id = ?", qty, nowISO(), ingredientId);
+    await run(
       "INSERT INTO inventory_movements (ingredient_id, type, quantity, note, order_id, user_id, created_at) VALUES (?,?,?,?,?,?,?)",
       ingredientId, "out", qty, `Order ${order.order_number}`, orderId, userId, nowISO()
     );
   }
-  run("UPDATE orders SET stock_deducted = 1 WHERE id = ?", orderId);
+  await run("UPDATE orders SET stock_deducted = 1 WHERE id = ?", orderId);
 
   // Low stock alerts
-  if (getSetting("low_stock_alerts", "1") === "1") {
-    for (const ingredient of all("SELECT * FROM ingredients WHERE stock_qty <= low_stock_threshold")) {
-      const existing = get(
+  if (await getSetting("low_stock_alerts", "1") === "1") {
+    for (const ingredient of await all("SELECT * FROM ingredients WHERE stock_qty <= low_stock_threshold")) {
+      const existing = await get(
         "SELECT id FROM notifications WHERE audience = 'admin' AND type = 'low-stock' AND title = ? AND is_read = 0",
         `Low stock: ${ingredient.name}`
       );
       if (!existing) {
-        notify({
+        await notify({
           audience: "admin", type: "low-stock", title: `Low stock: ${ingredient.name}`,
           message: `${ingredient.name} is down to ${round2(ingredient.stock_qty)} ${ingredient.unit}. Reorder soon.`
         });
@@ -389,40 +399,40 @@ function deductStockForOrder(orderId, userId, userName) {
   return { deducted: true, shortages: [] };
 }
 
-function restoreStockForOrder(orderId, userId, userName) {
-  const order = get("SELECT * FROM orders WHERE id = ?", orderId);
+async function restoreStockForOrder(orderId, userId, userName) {
+  const order = await get("SELECT * FROM orders WHERE id = ?", orderId);
   if (!order || !order.stock_deducted) return false;
-  const items = all("SELECT * FROM order_items WHERE order_id = ?", orderId);
+  const items = await all("SELECT * FROM order_items WHERE order_id = ?", orderId);
   for (const item of items) {
     if (!item.product_id) continue;
-    const recipe = all("SELECT ingredient_id, quantity FROM product_recipes WHERE product_id = ?", item.product_id);
+    const recipe = await all("SELECT ingredient_id, quantity FROM product_recipes WHERE product_id = ?", item.product_id);
     for (const r of recipe) {
       const qty = r.quantity * item.quantity;
-      run("UPDATE ingredients SET stock_qty = stock_qty + ?, updated_at = ? WHERE id = ?", qty, nowISO(), r.ingredient_id);
-      run(
+      await run("UPDATE ingredients SET stock_qty = stock_qty + ?, updated_at = ? WHERE id = ?", qty, nowISO(), r.ingredient_id);
+      await run(
         "INSERT INTO inventory_movements (ingredient_id, type, quantity, note, order_id, user_id, created_at) VALUES (?,?,?,?,?,?,?)",
         r.ingredient_id, "in", qty, `Returned from ${order.order_number}`, orderId, userId, nowISO()
       );
     }
   }
-  run("UPDATE orders SET stock_deducted = 0 WHERE id = ?", orderId);
+  await run("UPDATE orders SET stock_deducted = 0 WHERE id = ?", orderId);
   return true;
 }
 
-function notifyAllAdmins(title, message, type = "info") {
-  notify({ audience: "admin", type, title, message });
+async function notifyAllAdmins(title, message, type = "info") {
+  await notify({ audience: "admin", type, title, message });
 }
 
 /* ------------------------------------------------------------------ */
 /* Setup + Auth                                                        */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/setup/status", ({ res }) => {
-  sendJSON(res, 200, { ok: true, initialized: isInitialized() });
+route("GET", "/api/setup/status", async ({ res }) => {
+  sendJSON(res, 200, { ok: true, initialized: await isInitialized() });
 });
 
-route("POST", "/api/setup", ({ res, body, ip }) => {
-  if (isInitialized()) return sendError(res, 409, "This system has already been initialized.");
+route("POST", "/api/setup", async ({ res, body, ip }) => {
+  if (await isInitialized()) return sendError(res, 409, "This system has already been initialized.");
   if (!verifySetupToken(body.setupToken)) return sendError(res, 403, "Invalid setup token. Check data/setup-token.txt on the server.");
   const fullName = requireText(body.fullName, "Full name", { max: 120 });
   const username = requireText(body.username, "Username", { max: 40 });
@@ -433,57 +443,57 @@ route("POST", "/api/setup", ({ res, body, ip }) => {
   if (passwordError) return sendError(res, 400, passwordError);
   if (body.password !== body.confirmPassword) return sendError(res, 400, "Passwords do not match.");
 
-  const created = tx(() => {
+  const created = await tx(async () => {
     const ts = nowISO();
-    const result = run(
+    const result = await run(
       "INSERT INTO users (full_name, username, email, contact, password_hash, role, status, must_change_password, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,0,NULL,?,?)",
       fullName, username, email, sanitizeText(body.contact, 40), hashPassword(body.password), "admin", "active", ts, ts
     );
     const userId = Number(result.lastInsertRowid);
-    setSetting("setup_complete", "1");
-    setSetting("shop_name", sanitizeText(body.shopName, 120) || getSetting("shop_name", "Trippers Coffee"));
-    logActivity({ userId, userName: fullName, role: "admin", action: "system.initialized", entity: "user", entityId: userId, details: "First administrator account created", ip });
+    await setSetting("setup_complete", "1");
+    await setSetting("shop_name", sanitizeText(body.shopName, 120) || (await getSetting("shop_name", "Trippers Coffee")));
+    await logActivity({ userId, userName: fullName, role: "admin", action: "system.initialized", entity: "user", entityId: userId, details: "First administrator account created", ip });
     return get("SELECT * FROM users WHERE id = ?", userId);
   });
   completeSetup();
   sendJSON(res, 201, { ok: true, message: "Administrator account created.", user: publicUser(created) });
 });
 
-route("POST", "/api/auth/login", ({ req, res, body, ip }) => {
+route("POST", "/api/auth/login", async ({ req, res, body, ip }) => {
   const identifier = sanitizeText(body.identifier, 160).toLowerCase();
   const password = typeof body.password === "string" ? body.password : "";
   if (!identifier || !password) return sendError(res, 400, "Enter your username or email and password.");
 
-  if (recentFailures(identifier, ip) >= 10) {
+  if (await recentFailures(identifier, ip) >= 10) {
     return sendError(res, 429, "Too many failed attempts. Please wait 15 minutes and try again.");
   }
 
-  const user = get("SELECT * FROM users WHERE lower(username) = ? OR lower(email) = ?", identifier, identifier);
+  const user = await get("SELECT * FROM users WHERE lower(username) = ? OR lower(email) = ?", identifier, identifier);
   if (!user) {
-    recordAttempt(identifier, ip, false);
-    logActivity({ userName: identifier.slice(0, 60), role: "unknown", action: "auth.login.failed", details: "Unknown account", ip });
+    await recordAttempt(identifier, ip, false);
+    await logActivity({ userName: identifier.slice(0, 60), role: "unknown", action: "auth.login.failed", details: "Unknown account", ip });
     return sendError(res, 401, "We couldn't find an account with those credentials.");
   }
   if (user.locked_until && new Date(user.locked_until).getTime() > Date.now()) {
     return sendError(res, 423, "This account is temporarily locked. Try again in a few minutes.");
   }
   if (user.status !== "active") {
-    recordAttempt(identifier, ip, false);
+    await recordAttempt(identifier, ip, false);
     return sendError(res, 403, "This account has been deactivated. Contact the administrator.");
   }
   if (!verifyPassword(password, user.password_hash)) {
     const attempts = user.failed_attempts + 1;
     const lockedUntil = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
-    run("UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?", attempts, lockedUntil, user.id);
-    recordAttempt(identifier, ip, false);
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.login.failed", details: "Incorrect password", ip });
+    await run("UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?", attempts, lockedUntil, user.id);
+    await recordAttempt(identifier, ip, false);
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.login.failed", details: "Incorrect password", ip });
     return sendError(res, 401, "Incorrect password. Please try again.");
   }
 
-  run("UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = ? WHERE id = ?", nowISO(), user.id);
-  recordAttempt(identifier, ip, true);
-  createSession(req, res, user, Boolean(body.remember));
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.login", details: `${user.role} signed in`, ip });
+  await run("UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = ? WHERE id = ?", nowISO(), user.id);
+  await recordAttempt(identifier, ip, true);
+  await createSession(req, res, user, Boolean(body.remember));
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.login", details: `${user.role} signed in`, ip });
 
   sendJSON(res, 200, {
     ok: true,
@@ -493,13 +503,13 @@ route("POST", "/api/auth/login", ({ req, res, body, ip }) => {
   });
 });
 
-route("POST", "/api/auth/logout", ({ req, res, user, ip }) => {
-  if (user) logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.logout", ip });
-  destroySession(req, res);
+route("POST", "/api/auth/logout", async ({ req, res, user, ip }) => {
+  if (user) await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.logout", ip });
+  await destroySession(req, res);
   sendJSON(res, 200, { ok: true });
 });
 
-route("GET", "/api/auth/session", ({ res, user }) => {
+route("GET", "/api/auth/session", async ({ res, user }) => {
   if (!user) return sendJSON(res, 200, { ok: true, authenticated: false });
   sendJSON(res, 200, {
     ok: true,
@@ -509,7 +519,7 @@ route("GET", "/api/auth/session", ({ res, user }) => {
   });
 });
 
-route("POST", "/api/auth/change-password", ({ res, user, body, ip }) => {
+route("POST", "/api/auth/change-password", async ({ res, user, body, ip }) => {
   if (!user) return sendError(res, 401, "Sign in first.");
   const current = typeof body.currentPassword === "string" ? body.currentPassword : "";
   if (!verifyPassword(current, user.password_hash) && !user.must_change_password) {
@@ -520,21 +530,21 @@ route("POST", "/api/auth/change-password", ({ res, user, body, ip }) => {
   if (body.newPassword !== body.confirmPassword) return sendError(res, 400, "New passwords do not match.");
   if (verifyPassword(body.newPassword, user.password_hash)) return sendError(res, 400, "Choose a password different from your temporary one.");
 
-  run("UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?", hashPassword(body.newPassword), nowISO(), user.id);
-  run("DELETE FROM sessions WHERE user_id = ? AND id <> (SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1)", user.id, user.id);
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.password.change", details: "Password updated", ip });
+  await run("UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?", hashPassword(body.newPassword), nowISO(), user.id);
+  await run("DELETE FROM sessions WHERE user_id = ? AND id <> ?", user.id, user.session_id);
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.password.change", details: "Password updated", ip });
   sendJSON(res, 200, { ok: true, message: "Password updated. Please keep it safe." });
 });
 
-route("POST", "/api/auth/forgot-password", ({ res, body, ip }) => {
+route("POST", "/api/auth/forgot-password", async ({ res, body, ip }) => {
   const identifier = sanitizeText(body.identifier, 160).toLowerCase();
-  const user = identifier ? get("SELECT * FROM users WHERE lower(username) = ? OR lower(email) = ?", identifier, identifier) : null;
+  const user = identifier ? await get("SELECT * FROM users WHERE lower(username) = ? OR lower(email) = ?", identifier, identifier) : null;
   if (user) {
-    notify({
+    await notify({
       audience: "admin", type: "security", title: "Password reset requested",
       message: `${user.full_name} (${user.username}) requested a password reset. Reset it from Manage Cashiers.`
     });
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.password.reset_requested", ip });
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "auth.password.reset_requested", ip });
   }
   sendJSON(res, 200, {
     ok: true,
@@ -546,10 +556,10 @@ route("POST", "/api/auth/forgot-password", ({ res, body, ip }) => {
 /* Cashier accounts (admin only)                                       */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/users", ({ res, query }) => {
+route("GET", "/api/users", async ({ res, query }) => {
   const search = sanitizeText(query.search, 80).toLowerCase();
   const status = sanitizeText(query.status, 20);
-  const rows = all(
+  const rows = await all(
     `SELECT u.id, u.full_name, u.username, u.email, u.contact, u.role, u.status,
             u.must_change_password, u.last_login_at, u.created_at, u.updated_at,
             c.full_name AS created_by_name
@@ -572,7 +582,7 @@ route("GET", "/api/users", ({ res, query }) => {
   });
 });
 
-route("POST", "/api/users", ({ res, body, user, ip }) => {
+route("POST", "/api/users", async ({ res, body, user, ip }) => {
   // Role is always forced to cashier. Admin accounts cannot be created here.
   const fullName = requireText(body.fullName, "Full name", { max: 120 });
   const username = requireText(body.username, "Username", { max: 40 });
@@ -585,26 +595,26 @@ route("POST", "/api/users", ({ res, body, user, ip }) => {
   const error = validatePassword(password);
   if (error) return sendError(res, 400, error);
   if (password !== body.confirmPassword) return sendError(res, 400, "Passwords do not match.");
-  if (get("SELECT id FROM users WHERE lower(username) = ?", username.toLowerCase())) return sendError(res, 409, "That username is already taken.");
-  if (get("SELECT id FROM users WHERE lower(email) = ?", email)) return sendError(res, 409, "That email is already registered.");
+  if (await get("SELECT id FROM users WHERE lower(username) = ?", username.toLowerCase())) return sendError(res, 409, "That username is already taken.");
+  if (await get("SELECT id FROM users WHERE lower(email) = ?", email)) return sendError(res, 409, "That email is already registered.");
 
-  const created = tx(() => {
+  const created = await tx(async () => {
     const ts = nowISO();
-    const result = run(
+    const result = await run(
       "INSERT INTO users (full_name, username, email, contact, password_hash, role, status, must_change_password, created_by, created_at, updated_at) VALUES (?,?,?,?,?,'cashier',?,1,?,?,?)",
       fullName, username, email, contact, hashPassword(password), status, user.id, ts, ts
     );
     const newId = Number(result.lastInsertRowid);
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "user.cashier.created", entity: "user", entityId: newId, details: `Created cashier ${fullName} (${username})`, ip });
-    notifyAllAdmins("New cashier account created", `${fullName} can now sign in as a cashier.`, "account");
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "user.cashier.created", entity: "user", entityId: newId, details: `Created cashier ${fullName} (${username})`, ip });
+    await notifyAllAdmins("New cashier account created", `${fullName} can now sign in as a cashier.`, "account");
     return get("SELECT * FROM users WHERE id = ?", newId);
   });
   sendJSON(res, 201, { ok: true, user: publicUser(created), message: "Cashier account created. Share the temporary password securely." });
 });
 
-route("PATCH", "/api/users/:id", ({ res, params, body, user, ip }) => {
+route("PATCH", "/api/users/:id", async ({ res, params, body, user, ip }) => {
   const id = idParam(params.id, "cashier ID");
-  const target = get("SELECT * FROM users WHERE id = ? AND role = 'cashier'", id);
+  const target = await get("SELECT * FROM users WHERE id = ? AND role = 'cashier'", id);
   if (!target) return sendError(res, 404, "Cashier account not found.");
 
   const fullName = body.fullName != null ? requireText(body.fullName, "Full name", { max: 120 }) : target.full_name;
@@ -614,23 +624,23 @@ route("PATCH", "/api/users/:id", ({ res, params, body, user, ip }) => {
   const status = body.status === "inactive" ? "inactive" : body.status === "active" ? "active" : target.status;
   if (!isEmail(email)) return sendError(res, 400, "Enter a valid email address.");
   if (!/^[a-zA-Z0-9._-]{3,40}$/.test(username)) return sendError(res, 400, "Username must be 3–40 characters.");
-  const dupe = get("SELECT id FROM users WHERE (lower(username) = ? OR lower(email) = ?) AND id <> ?", username.toLowerCase(), email, id);
+  const dupe = await get("SELECT id FROM users WHERE (lower(username) = ? OR lower(email) = ?) AND id <> ?", username.toLowerCase(), email, id);
   if (dupe) return sendError(res, 409, "That username or email is already in use.");
 
-  tx(() => {
-    run(
+  await tx(async () => {
+    await run(
       "UPDATE users SET full_name = ?, username = ?, email = ?, contact = ?, status = ?, updated_at = ? WHERE id = ?",
       fullName, username, email, contact, status, nowISO(), id
     );
-    if (status === "inactive") run("DELETE FROM sessions WHERE user_id = ?", id);
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "user.cashier.updated", entity: "user", entityId: id, details: `Updated cashier ${fullName}`, ip });
+    if (status === "inactive") await run("DELETE FROM sessions WHERE user_id = ?", id);
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "user.cashier.updated", entity: "user", entityId: id, details: `Updated cashier ${fullName}`, ip });
   });
-  sendJSON(res, 200, { ok: true, message: "Cashier account updated.", user: publicUser(get("SELECT * FROM users WHERE id = ?", id)) });
+  sendJSON(res, 200, { ok: true, message: "Cashier account updated.", user: publicUser(await get("SELECT * FROM users WHERE id = ?", id)) });
 });
 
-route("POST", "/api/users/:id/reset-password", ({ res, params, body, user, ip }) => {
+route("POST", "/api/users/:id/reset-password", async ({ res, params, body, user, ip }) => {
   const id = idParam(params.id, "cashier ID");
-  const target = get("SELECT * FROM users WHERE id = ? AND role = 'cashier'", id);
+  const target = await get("SELECT * FROM users WHERE id = ? AND role = 'cashier'", id);
   if (!target) return sendError(res, 404, "Cashier account not found.");
   let password = typeof body.password === "string" && body.password ? body.password : "";
   const generated = !password;
@@ -638,9 +648,9 @@ route("POST", "/api/users/:id/reset-password", ({ res, params, body, user, ip })
   const error = validatePassword(password);
   if (error) return sendError(res, 400, error);
 
-  run("UPDATE users SET password_hash = ?, must_change_password = 1, failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE id = ?", hashPassword(password), nowISO(), id);
-  run("DELETE FROM sessions WHERE user_id = ?", id);
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "user.cashier.password_reset", entity: "user", entityId: id, details: `Reset password for ${target.full_name}`, ip });
+  await run("UPDATE users SET password_hash = ?, must_change_password = 1, failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE id = ?", hashPassword(password), nowISO(), id);
+  await run("DELETE FROM sessions WHERE user_id = ?", id);
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "user.cashier.password_reset", entity: "user", entityId: id, details: `Reset password for ${target.full_name}`, ip });
   sendJSON(res, 200, {
     ok: true,
     temporaryPassword: generated ? password : undefined,
@@ -648,15 +658,15 @@ route("POST", "/api/users/:id/reset-password", ({ res, params, body, user, ip })
   });
 });
 
-route("GET", "/api/users/:id/activity", ({ res, params }) => {
+route("GET", "/api/users/:id/activity", async ({ res, params }) => {
   const id = idParam(params.id, "cashier ID");
-  const rows = all("SELECT * FROM activity_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 200", id);
+  const rows = await all("SELECT * FROM activity_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 200", id);
   sendJSON(res, 200, {
     ok: true,
     activity: rows.map((r) => ({
       id: r.id, action: r.action, details: r.details, ip: r.ip, createdAt: r.created_at
     })),
-    logins: all("SELECT identifier, ip, success, created_at FROM login_attempts WHERE identifier = (SELECT lower(username) FROM users WHERE id = ?) ORDER BY created_at DESC LIMIT 50", id)
+    logins: await all("SELECT identifier, ip, success, created_at FROM login_attempts WHERE identifier = (SELECT lower(username) FROM users WHERE id = ?) ORDER BY created_at DESC LIMIT 50", id)
   });
 });
 
@@ -664,12 +674,12 @@ route("GET", "/api/users/:id/activity", ({ res, params }) => {
 /* Catalog (shared)                                                    */
 /* ------------------------------------------------------------------ */
 
-function productPayload() {
-  const categories = all("SELECT * FROM categories ORDER BY sort_order, name");
-  const products = all("SELECT * FROM products ORDER BY name");
-  const sizes = all("SELECT * FROM product_sizes ORDER BY price_delta");
-  const addons = all("SELECT * FROM addons WHERE is_active = 1 ORDER BY name");
-  const links = all("SELECT * FROM product_addons");
+async function productPayload() {
+  const categories = await all("SELECT * FROM categories ORDER BY sort_order, name");
+  const products = await all("SELECT * FROM products ORDER BY name");
+  const sizes = await all("SELECT * FROM product_sizes ORDER BY price_delta");
+  const addons = await all("SELECT * FROM addons WHERE is_active = 1 ORDER BY name");
+  const links = await all("SELECT * FROM product_addons");
   return {
     categories,
     addons,
@@ -684,12 +694,12 @@ function productPayload() {
   };
 }
 
-route("GET", "/api/catalog", ({ res }) => {
-  sendJSON(res, 200, { ok: true, ...productPayload() });
+route("GET", "/api/catalog", async ({ res }) => {
+  sendJSON(res, 200, { ok: true, ...(await productPayload()) });
 });
 
-route("GET", "/api/products", ({ res, query }) => {
-  const payload = productPayload();
+route("GET", "/api/products", async ({ res, query }) => {
+  const payload = await productPayload();
   const search = sanitizeText(query.search, 80).toLowerCase();
   const category = toNumber(query.categoryId, 0);
   let products = payload.products;
@@ -698,10 +708,10 @@ route("GET", "/api/products", ({ res, query }) => {
   sendJSON(res, 200, { ok: true, products, categories: payload.categories, addons: payload.addons });
 });
 
-function saveProduct({ body, user, ip, existing }) {
+async function saveProduct({ body, user, ip, existing }) {
   const name = requireText(body.name, "Product name", { max: 120 });
   const categoryId = idParam(body.categoryId, "category");
-  if (!get("SELECT id FROM categories WHERE id = ?", categoryId)) fail(400, "Choose a valid category.");
+  if (!await get("SELECT id FROM categories WHERE id = ?", categoryId)) fail(400, "Choose a valid category.");
   const price = round2(toNumber(body.price, -1));
   if (price < 0) fail(400, "Enter a valid product price.");
   const description = sanitizeText(body.description, 600);
@@ -712,28 +722,28 @@ function saveProduct({ body, user, ip, existing }) {
   const image = sanitizeText(body.image, 1000);
   const ts = nowISO();
 
-  return tx(() => {
+  return tx(async () => {
     let productId;
     if (existing) {
-      run(
+      await run(
         "UPDATE products SET category_id=?, name=?, description=?, price=?, emoji=?, image=?, has_sizes=?, is_featured=?, is_available=?, updated_at=? WHERE id=?",
         categoryId, name, description, price, emoji, image, hasSizes, isFeatured, isAvailable, ts, existing.id
       );
       productId = existing.id;
-      logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "product.updated", entity: "product", entityId: productId, details: name, ip });
+      await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "product.updated", entity: "product", entityId: productId, details: name, ip });
     } else {
       let slug = slugify(name) || `product-${Date.now()}`;
-      if (get("SELECT id FROM products WHERE slug = ?", slug)) slug = `${slug}-${Date.now().toString(36)}`;
-      const result = run(
+      if (await get("SELECT id FROM products WHERE slug = ?", slug)) slug = `${slug}-${Date.now().toString(36)}`;
+      const result = await run(
         "INSERT INTO products (category_id, name, slug, description, price, image, emoji, has_sizes, is_featured, is_available, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         categoryId, name, slug, description, price, image, emoji, hasSizes, isFeatured, isAvailable, ts, ts
       );
       productId = Number(result.lastInsertRowid);
-      logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "product.created", entity: "product", entityId: productId, details: name, ip });
+      await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "product.created", entity: "product", entityId: productId, details: name, ip });
     }
 
     if (body.hasSizes !== undefined || Array.isArray(body.sizes)) {
-      run("DELETE FROM product_sizes WHERE product_id = ?", productId);
+      await run("DELETE FROM product_sizes WHERE product_id = ?", productId);
       if (hasSizes) {
         const sizes = Array.isArray(body.sizes) && body.sizes.length
           ? body.sizes
@@ -741,28 +751,28 @@ function saveProduct({ body, user, ip, existing }) {
         for (const size of sizes) {
           const sizeName = sanitizeText(size.name, 30);
           if (!sizeName) continue;
-          run("INSERT INTO product_sizes (product_id, name, price_delta) VALUES (?,?,?)", productId, sizeName, round2(toNumber(size.priceDelta, 0)));
+          await run("INSERT INTO product_sizes (product_id, name, price_delta) VALUES (?,?,?)", productId, sizeName, round2(toNumber(size.priceDelta, 0)));
         }
       }
     }
 
     if (Array.isArray(body.addonIds)) {
-      run("DELETE FROM product_addons WHERE product_id = ?", productId);
+      await run("DELETE FROM product_addons WHERE product_id = ?", productId);
       const addonIds = body.addonIds.map(Number).filter(Boolean);
       for (const addonId of addonIds) {
-        if (get("SELECT id FROM addons WHERE id = ?", addonId)) {
-          run("INSERT INTO product_addons (product_id, addon_id) VALUES (?,?)", productId, addonId);
+        if (await get("SELECT id FROM addons WHERE id = ?", addonId)) {
+          await run("INSERT INTO product_addons (product_id, addon_id) VALUES (?,?)", productId, addonId);
         }
       }
     }
 
     if (Array.isArray(body.recipe)) {
-      run("DELETE FROM product_recipes WHERE product_id = ?", productId);
+      await run("DELETE FROM product_recipes WHERE product_id = ?", productId);
       for (const row of body.recipe) {
         const ingredientId = Number(row.ingredientId);
         const qty = toNumber(row.quantity, 0);
-        if (qty > 0 && get("SELECT id FROM ingredients WHERE id = ?", ingredientId)) {
-          run("INSERT INTO product_recipes (product_id, ingredient_id, quantity) VALUES (?,?,?)", productId, ingredientId, qty);
+        if (qty > 0 && await get("SELECT id FROM ingredients WHERE id = ?", ingredientId)) {
+          await run("INSERT INTO product_recipes (product_id, ingredient_id, quantity) VALUES (?,?,?)", productId, ingredientId, qty);
         }
       }
     }
@@ -770,77 +780,77 @@ function saveProduct({ body, user, ip, existing }) {
   });
 }
 
-route("POST", "/api/products", ({ res, body, user, ip }) => {
-  const id = saveProduct({ body, user, ip });
+route("POST", "/api/products", async ({ res, body, user, ip }) => {
+  const id = await saveProduct({ body, user, ip });
   sendJSON(res, 201, { ok: true, id, message: "Product created." });
 });
 
-route("PATCH", "/api/products/:id", ({ res, params, body, user, ip }) => {
+route("PATCH", "/api/products/:id", async ({ res, params, body, user, ip }) => {
   const id = idParam(params.id, "product ID");
-  const existing = get("SELECT * FROM products WHERE id = ?", id);
+  const existing = await get("SELECT * FROM products WHERE id = ?", id);
   if (!existing) return sendError(res, 404, "Product not found.");
-  saveProduct({ body, user, ip, existing });
+  await saveProduct({ body, user, ip, existing });
   sendJSON(res, 200, { ok: true, message: "Product updated." });
 });
 
-route("DELETE", "/api/products/:id", ({ res, params, user, ip }) => {
+route("DELETE", "/api/products/:id", async ({ res, params, user, ip }) => {
   const id = idParam(params.id, "product ID");
-  const existing = get("SELECT * FROM products WHERE id = ?", id);
+  const existing = await get("SELECT * FROM products WHERE id = ?", id);
   if (!existing) return sendError(res, 404, "Product not found.");
-  run("DELETE FROM products WHERE id = ?", id);
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "product.deleted", entity: "product", entityId: id, details: existing.name, ip });
+  await run("DELETE FROM products WHERE id = ?", id);
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "product.deleted", entity: "product", entityId: id, details: existing.name, ip });
   sendJSON(res, 200, { ok: true, message: "Product deleted." });
 });
 
-route("GET", "/api/categories", ({ res }) => {
-  sendJSON(res, 200, { ok: true, categories: all("SELECT * FROM categories ORDER BY sort_order, name") });
+route("GET", "/api/categories", async ({ res }) => {
+  sendJSON(res, 200, { ok: true, categories: await all("SELECT * FROM categories ORDER BY sort_order, name") });
 });
 
-route("POST", "/api/categories", ({ res, body, user, ip }) => {
+route("POST", "/api/categories", async ({ res, body, user, ip }) => {
   const name = requireText(body.name, "Category name", { max: 80 });
-  if (get("SELECT id FROM categories WHERE lower(name) = ?", name.toLowerCase())) return sendError(res, 409, "That category already exists.");
-  const result = run("INSERT INTO categories (name, sort_order, created_at) VALUES (?,?,?)", name, toNumber(body.sortOrder, 99), nowISO());
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "category.created", entity: "category", entityId: result.lastInsertRowid, details: name, ip });
+  if (await get("SELECT id FROM categories WHERE lower(name) = ?", name.toLowerCase())) return sendError(res, 409, "That category already exists.");
+  const result = await run("INSERT INTO categories (name, sort_order, created_at) VALUES (?,?,?)", name, toNumber(body.sortOrder, 99), nowISO());
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "category.created", entity: "category", entityId: result.lastInsertRowid, details: name, ip });
   sendJSON(res, 201, { ok: true, id: Number(result.lastInsertRowid) });
 });
 
-route("PATCH", "/api/categories/:id", ({ res, params, body }) => {
+route("PATCH", "/api/categories/:id", async ({ res, params, body }) => {
   const id = idParam(params.id, "category ID");
   const name = requireText(body.name, "Category name", { max: 80 });
-  if (!get("SELECT id FROM categories WHERE id = ?", id)) return sendError(res, 404, "Category not found.");
-  run("UPDATE categories SET name = ? WHERE id = ?", name, id);
+  if (!await get("SELECT id FROM categories WHERE id = ?", id)) return sendError(res, 404, "Category not found.");
+  await run("UPDATE categories SET name = ? WHERE id = ?", name, id);
   sendJSON(res, 200, { ok: true });
 });
 
-route("DELETE", "/api/categories/:id", ({ res, params }) => {
+route("DELETE", "/api/categories/:id", async ({ res, params }) => {
   const id = idParam(params.id, "category ID");
-  const used = get("SELECT COUNT(*) AS n FROM products WHERE category_id = ?", id);
+  const used = await get("SELECT COUNT(*) AS n FROM products WHERE category_id = ?", id);
   if (used && used.n > 0) return sendError(res, 409, "Move or delete the products in this category first.");
-  run("DELETE FROM categories WHERE id = ?", id);
+  await run("DELETE FROM categories WHERE id = ?", id);
   sendJSON(res, 200, { ok: true });
 });
 
-route("GET", "/api/addons", ({ res }) => {
-  sendJSON(res, 200, { ok: true, addons: all("SELECT * FROM addons ORDER BY name") });
+route("GET", "/api/addons", async ({ res }) => {
+  sendJSON(res, 200, { ok: true, addons: await all("SELECT * FROM addons ORDER BY name") });
 });
 
-route("POST", "/api/addons", ({ res, body }) => {
+route("POST", "/api/addons", async ({ res, body }) => {
   const name = requireText(body.name, "Add-on name", { max: 80 });
-  if (get("SELECT id FROM addons WHERE lower(name) = ?", name.toLowerCase())) return sendError(res, 409, "That add-on already exists.");
-  const result = run("INSERT INTO addons (name, price, is_active) VALUES (?,?,1)", name, round2(toNumber(body.price, 0)));
+  if (await get("SELECT id FROM addons WHERE lower(name) = ?", name.toLowerCase())) return sendError(res, 409, "That add-on already exists.");
+  const result = await run("INSERT INTO addons (name, price, is_active) VALUES (?,?,1)", name, round2(toNumber(body.price, 0)));
   sendJSON(res, 201, { ok: true, id: Number(result.lastInsertRowid) });
 });
 
-route("PATCH", "/api/addons/:id", ({ res, params, body }) => {
+route("PATCH", "/api/addons/:id", async ({ res, params, body }) => {
   const id = idParam(params.id, "add-on ID");
   const name = requireText(body.name, "Add-on name", { max: 80 });
-  run("UPDATE addons SET name = ?, price = ?, is_active = ? WHERE id = ?", name, round2(toNumber(body.price, 0)), body.isActive === false ? 0 : 1, id);
+  await run("UPDATE addons SET name = ?, price = ?, is_active = ? WHERE id = ?", name, round2(toNumber(body.price, 0)), body.isActive === false ? 0 : 1, id);
   sendJSON(res, 200, { ok: true });
 });
 
-route("DELETE", "/api/addons/:id", ({ res, params }) => {
+route("DELETE", "/api/addons/:id", async ({ res, params }) => {
   const id = idParam(params.id, "add-on ID");
-  run("DELETE FROM addons WHERE id = ?", id);
+  await run("DELETE FROM addons WHERE id = ?", id);
   sendJSON(res, 200, { ok: true });
 });
 
@@ -848,35 +858,35 @@ route("DELETE", "/api/addons/:id", ({ res, params }) => {
 /* Inventory + suppliers                                               */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/ingredients", ({ res }) => {
-  const ingredients = all(
+route("GET", "/api/ingredients", async ({ res }) => {
+  const ingredients = (await all(
     `SELECT i.*, s.name AS supplier_name
        FROM ingredients i LEFT JOIN suppliers s ON s.id = i.supplier_id
       ORDER BY i.name`
-  ).map((i) => ({ ...i, isLow: i.stock_qty <= i.low_stock_threshold, isOut: i.stock_qty <= 0 }));
+  )).map((i) => ({ ...i, isLow: i.stock_qty <= i.low_stock_threshold, isOut: i.stock_qty <= 0 }));
   sendJSON(res, 200, { ok: true, ingredients });
 });
 
-route("POST", "/api/ingredients", ({ res, body, user, ip }) => {
+route("POST", "/api/ingredients", async ({ res, body, user, ip }) => {
   const name = requireText(body.name, "Ingredient name", { max: 120 });
-  if (get("SELECT id FROM ingredients WHERE lower(name) = ?", name.toLowerCase())) return sendError(res, 409, "That ingredient already exists.");
+  if (await get("SELECT id FROM ingredients WHERE lower(name) = ?", name.toLowerCase())) return sendError(res, 409, "That ingredient already exists.");
   const ts = nowISO();
-  const result = run(
+  const result = await run(
     "INSERT INTO ingredients (name, category, unit, stock_qty, low_stock_threshold, cost_per_unit, supplier_id, expiry_date, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
     name, sanitizeText(body.category, 60) || "Other Supplies", sanitizeText(body.unit, 20) || "pcs",
     Math.max(0, toNumber(body.stockQty, 0)), Math.max(0, toNumber(body.lowStockThreshold, 0)),
     Math.max(0, toNumber(body.costPerUnit, 0)), body.supplierId ? Number(body.supplierId) : null,
     sanitizeText(body.expiryDate, 20) || null, ts, ts
   );
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "ingredient.created", entity: "ingredient", entityId: result.lastInsertRowid, details: name, ip });
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "ingredient.created", entity: "ingredient", entityId: result.lastInsertRowid, details: name, ip });
   sendJSON(res, 201, { ok: true, id: Number(result.lastInsertRowid) });
 });
 
-route("PATCH", "/api/ingredients/:id", ({ res, params, body, user, ip }) => {
+route("PATCH", "/api/ingredients/:id", async ({ res, params, body, user, ip }) => {
   const id = idParam(params.id, "ingredient ID");
-  const existing = get("SELECT * FROM ingredients WHERE id = ?", id);
+  const existing = await get("SELECT * FROM ingredients WHERE id = ?", id);
   if (!existing) return sendError(res, 404, "Ingredient not found.");
-  run(
+  await run(
     "UPDATE ingredients SET name=?, category=?, unit=?, low_stock_threshold=?, cost_per_unit=?, supplier_id=?, expiry_date=?, updated_at=? WHERE id=?",
     body.name != null ? requireText(body.name, "Ingredient name", { max: 120 }) : existing.name,
     body.category != null ? sanitizeText(body.category, 60) : existing.category,
@@ -887,25 +897,25 @@ route("PATCH", "/api/ingredients/:id", ({ res, params, body, user, ip }) => {
     body.expiryDate !== undefined ? (sanitizeText(body.expiryDate, 20) || null) : existing.expiry_date,
     nowISO(), id
   );
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "ingredient.updated", entity: "ingredient", entityId: id, details: existing.name, ip });
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "ingredient.updated", entity: "ingredient", entityId: id, details: existing.name, ip });
   sendJSON(res, 200, { ok: true });
 });
 
-route("DELETE", "/api/ingredients/:id", ({ res, params, user, ip }) => {
+route("DELETE", "/api/ingredients/:id", async ({ res, params, user, ip }) => {
   const id = idParam(params.id, "ingredient ID");
-  const existing = get("SELECT * FROM ingredients WHERE id = ?", id);
+  const existing = await get("SELECT * FROM ingredients WHERE id = ?", id);
   if (!existing) return sendError(res, 404, "Ingredient not found.");
-  run("DELETE FROM ingredients WHERE id = ?", id);
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "ingredient.deleted", entity: "ingredient", entityId: id, details: existing.name, ip });
+  await run("DELETE FROM ingredients WHERE id = ?", id);
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "ingredient.deleted", entity: "ingredient", entityId: id, details: existing.name, ip });
   sendJSON(res, 200, { ok: true });
 });
 
-route("POST", "/api/inventory/adjust", ({ res, body, user, ip }) => {
+route("POST", "/api/inventory/adjust", async ({ res, body, user, ip }) => {
   const ingredientId = idParam(body.ingredientId, "ingredient");
   const type = ["in", "out", "waste", "adjustment"].includes(body.type) ? body.type : "in";
   const quantity = toNumber(body.quantity, 0);
   if (quantity <= 0) return sendError(res, 400, "Enter a quantity greater than zero.");
-  const ingredient = get("SELECT * FROM ingredients WHERE id = ?", ingredientId);
+  const ingredient = await get("SELECT * FROM ingredients WHERE id = ?", ingredientId);
   if (!ingredient) return sendError(res, 404, "Ingredient not found.");
   const delta = type === "in" ? quantity : -quantity;
   if (type !== "adjustment" && ingredient.stock_qty + delta < 0) {
@@ -913,21 +923,21 @@ route("POST", "/api/inventory/adjust", ({ res, body, user, ip }) => {
   }
   const newQty = type === "adjustment" ? quantity : ingredient.stock_qty + delta;
   if (newQty < 0) return sendError(res, 400, "Stock cannot be negative.");
-  tx(() => {
-    run("UPDATE ingredients SET stock_qty = ?, updated_at = ? WHERE id = ?", newQty, nowISO(), ingredientId);
-    run(
+  await tx(async () => {
+    await run("UPDATE ingredients SET stock_qty = ?, updated_at = ? WHERE id = ?", newQty, nowISO(), ingredientId);
+    await run(
       "INSERT INTO inventory_movements (ingredient_id, type, quantity, note, user_id, created_at) VALUES (?,?,?,?,?,?)",
       ingredientId, type, quantity, sanitizeText(body.note, 300), user.id, nowISO()
     );
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: `inventory.${type}`, entity: "ingredient", entityId: ingredientId, details: `${quantity} ${ingredient.unit} of ${ingredient.name}`, ip });
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: `inventory.${type}`, entity: "ingredient", entityId: ingredientId, details: `${quantity} ${ingredient.unit} of ${ingredient.name}`, ip });
   });
   sendJSON(res, 200, { ok: true, stockQty: round2(newQty) });
 });
 
-route("GET", "/api/inventory/movements", ({ res, query }) => {
+route("GET", "/api/inventory/movements", async ({ res, query }) => {
   const limit = Math.min(500, Math.max(1, toNumber(query.limit, 150)));
   const ingredientId = toNumber(query.ingredientId, 0);
-  const rows = all(
+  const rows = await all(
     `SELECT m.*, i.name AS ingredient_name, i.unit, u.full_name AS user_name
        FROM inventory_movements m
        JOIN ingredients i ON i.id = m.ingredient_id
@@ -939,25 +949,25 @@ route("GET", "/api/inventory/movements", ({ res, query }) => {
   sendJSON(res, 200, { ok: true, movements: rows });
 });
 
-route("GET", "/api/suppliers", ({ res }) => {
-  sendJSON(res, 200, { ok: true, suppliers: all("SELECT * FROM suppliers ORDER BY name") });
+route("GET", "/api/suppliers", async ({ res }) => {
+  sendJSON(res, 200, { ok: true, suppliers: await all("SELECT * FROM suppliers ORDER BY name") });
 });
 
-route("POST", "/api/suppliers", ({ res, body }) => {
+route("POST", "/api/suppliers", async ({ res, body }) => {
   const name = requireText(body.name, "Supplier name", { max: 120 });
-  if (get("SELECT id FROM suppliers WHERE lower(name) = ?", name.toLowerCase())) return sendError(res, 409, "That supplier already exists.");
-  const result = run(
+  if (await get("SELECT id FROM suppliers WHERE lower(name) = ?", name.toLowerCase())) return sendError(res, 409, "That supplier already exists.");
+  const result = await run(
     "INSERT INTO suppliers (name, contact, email, notes, created_at) VALUES (?,?,?,?,?)",
     name, sanitizeText(body.contact, 60), sanitizeText(body.email, 160), sanitizeText(body.notes, 400), nowISO()
   );
   sendJSON(res, 201, { ok: true, id: Number(result.lastInsertRowid) });
 });
 
-route("PATCH", "/api/suppliers/:id", ({ res, params, body }) => {
+route("PATCH", "/api/suppliers/:id", async ({ res, params, body }) => {
   const id = idParam(params.id, "supplier ID");
-  const existing = get("SELECT * FROM suppliers WHERE id = ?", id);
+  const existing = await get("SELECT * FROM suppliers WHERE id = ?", id);
   if (!existing) return sendError(res, 404, "Supplier not found.");
-  run(
+  await run(
     "UPDATE suppliers SET name=?, contact=?, email=?, notes=? WHERE id=?",
     body.name != null ? requireText(body.name, "Supplier name", { max: 120 }) : existing.name,
     body.contact != null ? sanitizeText(body.contact, 60) : existing.contact,
@@ -968,9 +978,9 @@ route("PATCH", "/api/suppliers/:id", ({ res, params, body }) => {
   sendJSON(res, 200, { ok: true });
 });
 
-route("DELETE", "/api/suppliers/:id", ({ res, params }) => {
+route("DELETE", "/api/suppliers/:id", async ({ res, params }) => {
   const id = idParam(params.id, "supplier ID");
-  run("DELETE FROM suppliers WHERE id = ?", id);
+  await run("DELETE FROM suppliers WHERE id = ?", id);
   sendJSON(res, 200, { ok: true });
 });
 
@@ -978,9 +988,9 @@ route("DELETE", "/api/suppliers/:id", ({ res, params }) => {
 /* Customers                                                           */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/customers", ({ res, query }) => {
+route("GET", "/api/customers", async ({ res, query }) => {
   const search = sanitizeText(query.search, 80).toLowerCase();
-  const rows = all(
+  const rows = await all(
     `SELECT c.*, COUNT(o.id) AS order_count, COALESCE(SUM(CASE WHEN o.payment_status='paid' AND o.status<>'cancelled' THEN o.total ELSE 0 END),0) AS total_spent
        FROM customers c LEFT JOIN orders o ON o.customer_id = c.id
       ${search ? "WHERE lower(c.name) LIKE ? OR c.contact LIKE ? OR lower(c.email) LIKE ?" : ""}
@@ -990,25 +1000,25 @@ route("GET", "/api/customers", ({ res, query }) => {
   sendJSON(res, 200, { ok: true, customers: rows });
 });
 
-route("POST", "/api/customers", ({ res, body, user }) => {
+route("POST", "/api/customers", async ({ res, body, user }) => {
   const name = requireText(body.name, "Customer name", { max: 120 });
   const contact = sanitizeText(body.contact, 40);
   const email = sanitizeText(body.email, 160);
   const existing = contact
-    ? get("SELECT * FROM customers WHERE contact = ? AND lower(name) = ?", contact, name.toLowerCase())
+    ? await get("SELECT * FROM customers WHERE contact = ? AND lower(name) = ?", contact, name.toLowerCase())
     : null;
   if (existing) return sendJSON(res, 200, { ok: true, customer: existing, existing: true });
   const ts = nowISO();
-  const result = run("INSERT INTO customers (name, contact, email, notes, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+  const result = await run("INSERT INTO customers (name, contact, email, notes, created_at, updated_at) VALUES (?,?,?,?,?,?)",
     name, contact, email, sanitizeText(body.notes, 300), ts, ts);
-  sendJSON(res, 201, { ok: true, customer: get("SELECT * FROM customers WHERE id = ?", Number(result.lastInsertRowid)) });
+  sendJSON(res, 201, { ok: true, customer: await get("SELECT * FROM customers WHERE id = ?", Number(result.lastInsertRowid)) });
 });
 
-route("PATCH", "/api/customers/:id", ({ res, params, body }) => {
+route("PATCH", "/api/customers/:id", async ({ res, params, body }) => {
   const id = idParam(params.id, "customer ID");
-  const existing = get("SELECT * FROM customers WHERE id = ?", id);
+  const existing = await get("SELECT * FROM customers WHERE id = ?", id);
   if (!existing) return sendError(res, 404, "Customer not found.");
-  run("UPDATE customers SET name=?, contact=?, email=?, notes=?, updated_at=? WHERE id=?",
+  await run("UPDATE customers SET name=?, contact=?, email=?, notes=?, updated_at=? WHERE id=?",
     body.name != null ? requireText(body.name, "Customer name", { max: 120 }) : existing.name,
     body.contact != null ? sanitizeText(body.contact, 40) : existing.contact,
     body.email != null ? sanitizeText(body.email, 160) : existing.email,
@@ -1021,7 +1031,7 @@ route("PATCH", "/api/customers/:id", ({ res, params, body }) => {
 /* Orders                                                              */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/orders", ({ res, query }) => {
+route("GET", "/api/orders", async ({ res, query }) => {
   const status = sanitizeText(query.status, 20);
   const payment = sanitizeText(query.payment, 20);
   const method = sanitizeText(query.method, 40);
@@ -1035,18 +1045,24 @@ route("GET", "/api/orders", ({ res, query }) => {
   if (method) { where.push("o.payment_method = ?"); params.push(method); }
   if (cashierId) { where.push("o.cashier_id = ?"); params.push(cashierId); }
   if (search) { where.push("(o.order_number LIKE ? OR lower(o.customer_name) LIKE ?)"); params.push(`%${search}%`, `%${search.toLowerCase()}%`); }
-  const orders = orderListQuery(where.join(" AND "), params, Math.min(500, toNumber(query.limit, 200)));
+  const orders = await orderListQuery(where.join(" AND "), params, Math.min(500, toNumber(query.limit, 200)));
+  const enriched = await Promise.all(orders.map(async (o) => {
+    const items = await all("SELECT * FROM order_items WHERE order_id = ?", o.id);
+    const refund = await get("SELECT * FROM refunds WHERE order_id = ? ORDER BY id DESC LIMIT 1", o.id);
+    return {
+      ...o,
+      items: items.map((i) => ({ ...i, addons: parseJSON(i.addons, []) })),
+      refund: refund || null
+    };
+  }));
   sendJSON(res, 200, {
     ok: true,
     range: { ...{ start, end }, label: rangeLabel(start, end) },
-    orders: orders.map((o) => ({
-      ...o, items: all("SELECT * FROM order_items WHERE order_id = ?", o.id).map((i) => ({ ...i, addons: parseJSON(i.addons, []) })),
-      refund: get("SELECT * FROM refunds WHERE order_id = ? ORDER BY id DESC LIMIT 1", o.id) || null
-    }))
+    orders: enriched
   });
 });
 
-route("GET", "/api/orders/mine", ({ res, query, user }) => {
+route("GET", "/api/orders/mine", async ({ res, query, user }) => {
   const { start, end } = resolveRange(query.range || "month", query.from, query.to);
   const status = sanitizeText(query.status, 20);
   const search = sanitizeText(query.search, 80);
@@ -1054,84 +1070,82 @@ route("GET", "/api/orders/mine", ({ res, query, user }) => {
   const params = [user.id, start, end];
   if (["pending", "preparing", "ready", "completed", "cancelled"].includes(status)) { where += " AND o.status = ?"; params.push(status); }
   if (search) { where += " AND (o.order_number LIKE ? OR lower(o.customer_name) LIKE ?)"; params.push(`%${search}%`, `%${search.toLowerCase()}%`); }
-  const orders = orderListQuery(where, params, 300);
-  sendJSON(res, 200, {
-    ok: true,
-    orders: orders.map((o) => ({
-      ...o, items: all("SELECT * FROM order_items WHERE order_id = ?", o.id).map((i) => ({ ...i, addons: parseJSON(i.addons, []) }))
-    }))
-  });
+  const orders = await orderListQuery(where, params, 300);
+  const enriched = await Promise.all(orders.map(async (o) => {
+    const items = await all("SELECT * FROM order_items WHERE order_id = ?", o.id);
+    return {
+      ...o,
+      items: items.map((i) => ({ ...i, addons: parseJSON(i.addons, []) }))
+    };
+  }));
+  sendJSON(res, 200, { ok: true, orders: enriched });
 });
 
-route("POST", "/api/orders", ({ res, body, user, ip }) => {
+route("POST", "/api/orders", async ({ res, body, user, ip }) => {
   if (user.role === "admin") return sendError(res, 403, "Admin accounts cannot create POS orders. Sign in as a cashier.");
-  const lines = buildLineItems(body.items);
+  const lines = await buildLineItems(body.items);
   const subtotal = round2(lines.reduce((sum, l) => sum + l.lineTotal, 0));
-  const totals = computeTotals(subtotal, body.discountId, body.discountReference);
+  const totals = await computeTotals(subtotal, body.discountId, body.discountReference);
   const notes = sanitizeText(body.notes, 500);
 
   let customerId = null;
   let customerName = sanitizeText(body.customerName, 120) || "Walk-in guest";
   if (body.customerId) {
-    const customer = get("SELECT * FROM customers WHERE id = ?", Number(body.customerId));
+    const customer = await get("SELECT * FROM customers WHERE id = ?", Number(body.customerId));
     if (customer) { customerId = customer.id; customerName = customer.name; }
   } else if (customerName !== "Walk-in guest") {
     const ts = nowISO();
     const contact = sanitizeText(body.customerContact, 40);
     const email = sanitizeText(body.customerEmail, 160);
     const existing = contact
-      ? get("SELECT * FROM customers WHERE contact = ? AND lower(name) = ?", contact, customerName.toLowerCase())
+      ? await get("SELECT * FROM customers WHERE contact = ? AND lower(name) = ?", contact, customerName.toLowerCase())
       : null;
     if (existing) { customerId = existing.id; customerName = existing.name; }
     else {
-      const result = run("INSERT INTO customers (name, contact, email, notes, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+      const result = await run("INSERT INTO customers (name, contact, email, notes, created_at, updated_at) VALUES (?,?,?,?,?,?)",
         customerName, contact, email, "", ts, ts);
       customerId = Number(result.lastInsertRowid);
     }
   }
 
-  const created = tx(() => {
+  const created = await tx(async () => {
     const ts = nowISO();
-    const result = run(
+    const orderNumber = await newOrderNumber();
+    const result = await run(
       `INSERT INTO orders (order_number, customer_id, customer_name, cashier_id, cashier_name, status, payment_status,
                            subtotal, discount, discount_id, discount_label, tax, service_charge, total, payment_method,
                            stock_deducted, notes, biz_date, created_at, updated_at)
        VALUES (?,?,?,?,?,'pending','unpaid',?,?,?,?,?,?,?,'',0,?,?,?,?)`,
-      newOrderNumber(), customerId, customerName, user.id, user.full_name,
+      orderNumber, customerId, customerName, user.id, user.full_name,
       subtotal, totals.discount, totals.discountId, totals.discountLabel, totals.tax, totals.service, totals.total,
       notes, dateKey(), ts, ts
     );
     const orderId = Number(result.lastInsertRowid);
     for (const line of lines) {
-      run(
+      await run(
         "INSERT INTO order_items (order_id, product_id, product_name, category_name, size, addons, unit_price, quantity, notes, line_total) VALUES (?,?,?,?,?,?,?,?,?,?)",
         orderId, line.productId, line.productName, line.categoryName, line.size, JSON.stringify(line.addons), line.unitPrice, line.quantity, line.notes, line.lineTotal
       );
     }
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "order.created", entity: "order", entityId: orderId, details: `${orderNumberPlaceholder(result)} • ${customerName}`, ip });
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "order.created", entity: "order", entityId: orderId, details: `${orderNumber} • ${customerName}`, ip });
     return orderId;
   });
 
-  const order = readOrder(created);
+  const order = await readOrder(created);
   sendJSON(res, 201, { ok: true, order: publicOrder(order), totals, message: "Order saved as pending." });
 });
 
-function orderNumberPlaceholder(result) {
-  // lastInsertRowid is used for logging only; the number is fetched by the caller when needed.
-  return get("SELECT order_number FROM orders WHERE id = ?", Number(result.lastInsertRowid))?.order_number || `#${result.lastInsertRowid}`;
-}
-
-route("GET", "/api/orders/:id", ({ res, params, user }) => {
+route("GET", "/api/orders/:id", async ({ res, params, user }) => {
   const id = idParam(params.id, "order ID");
-  const order = readOrder(id);
+  const order = await readOrder(id);
   if (user.role === "cashier" && order.cashier_id !== user.id) {
     return sendError(res, 403, "You can only view your own orders.");
   }
   sendJSON(res, 200, { ok: true, order: publicOrder(order) });
 });
 
-function payOrder({ res, orderId, body, user, ip }) {
-  const order = get("SELECT * FROM orders WHERE id = ?", orderId);
+async function payOrder({ res, orderId, body, user, ip }) {
+  const order = await get("SELECT * FROM orders WHERE id = ?", orderId);
   if (!order) return sendError(res, 404, "Order not found.");
   if (user.role === "cashier" && order.cashier_id !== user.id) return sendError(res, 403, "You can only process your own orders.");
   if (order.payment_status === "paid") return sendError(res, 409, "This order has already been paid.");
@@ -1139,7 +1153,7 @@ function payOrder({ res, orderId, body, user, ip }) {
   if (order.status === "completed" && order.payment_status === "paid") return sendError(res, 409, "This order is already complete.");
 
   const method = sanitizeText(body.method, 40);
-  const methods = paymentMethods();
+  const methods = await paymentMethods();
   if (!methods.includes(method)) return sendError(res, 400, "Choose a valid payment method.");
   const tendered = method === "Cash" ? round2(toNumber(body.tendered, 0)) : round2(toNumber(body.amount, order.total));
   const reference = sanitizeText(body.reference, 80);
@@ -1153,9 +1167,10 @@ function payOrder({ res, orderId, body, user, ip }) {
 
   const change = method === "Cash" ? round2(tendered - order.total) : 0;
   const ts = nowISO();
+  const symbol = await SYMBOL();
 
-  const result = tx(() => {
-    const updated = run(
+  const result = await tx(async () => {
+    const updated = await run(
       "UPDATE orders SET payment_status='paid', status='completed', payment_method=?, completed_at=?, updated_at=? WHERE id=? AND payment_status='unpaid'",
       method, ts, ts, orderId
     );
@@ -1165,12 +1180,12 @@ function payOrder({ res, orderId, body, user, ip }) {
       error.expose = true;
       throw error;
     }
-    run(
+    await run(
       "INSERT INTO payments (order_id, cashier_id, method, amount, tendered, change_due, reference, status, created_at) VALUES (?,?,?,?,?,?,?, 'paid', ?)",
       orderId, user.id, method, order.total, tendered, change, reference, ts
     );
 
-    const deduction = deductStockForOrder(orderId, user.id, user.full_name);
+    const deduction = await deductStockForOrder(orderId, user.id, user.full_name);
     if (deduction.blocked) {
       const error = new Error(
         `Not enough stock to complete this sale: ${deduction.shortages.map((s) => `${s.name} (need ${s.required} ${s.unit}, have ${s.available})`).join(", ")}.`
@@ -1180,39 +1195,40 @@ function payOrder({ res, orderId, body, user, ip }) {
       throw error;
     }
 
-    const shift = get("SELECT * FROM shifts WHERE cashier_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1", order.cashier_id);
+    const shift = await get("SELECT * FROM shifts WHERE cashier_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1", order.cashier_id);
     if (shift) {
-      run("UPDATE shifts SET total_sales = total_sales + ?, order_count = order_count + 1 WHERE id = ?", order.total, shift.id);
+      await run("UPDATE shifts SET total_sales = total_sales + ?, order_count = order_count + 1 WHERE id = ?", order.total, shift.id);
     }
 
-    const number = get("SELECT order_number FROM orders WHERE id = ?", orderId).order_number;
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "order.paid", entity: "order", entityId: orderId, details: `${number} • ${method} • ${SYMBOL()}${order.total.toFixed(2)}`, ip });
-    notify({
+    const numberRow = await get("SELECT order_number FROM orders WHERE id = ?", orderId);
+    const number = numberRow.order_number;
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "order.paid", entity: "order", entityId: orderId, details: `${number} • ${method} • ${symbol}${Number(order.total).toFixed(2)}`, ip });
+    await notify({
       audience: "cashier", userId: order.cashier_id, type: "payment",
       title: "Payment received", message: `${number} completed via ${method}.`
     });
     if (order.total >= 1000) {
-      notifyAllAdmins("Large sale completed", `${number} for ${order.customer_name} totalled ${SYMBOL()}${order.total.toFixed(2)}.`, "sales");
+      await notifyAllAdmins("Large sale completed", `${number} for ${order.customer_name} totalled ${symbol}${Number(order.total).toFixed(2)}.`, "sales");
     }
     return number;
   });
 
   sendJSON(res, 200, {
     ok: true,
-    order: publicOrder(readOrder(orderId)),
+    order: publicOrder(await readOrder(orderId)),
     change,
     transactionId: result,
     message: "Payment accepted. Order sent to the bar."
   });
 }
 
-route("POST", "/api/orders/:id/pay", ({ res, params, body, user, ip }) => {
-  payOrder({ res, orderId: idParam(params.id, "order ID"), body, user, ip });
+route("POST", "/api/orders/:id/pay", async ({ res, params, body, user, ip }) => {
+  await payOrder({ res, orderId: idParam(params.id, "order ID"), body, user, ip });
 });
 
-route("PATCH", "/api/orders/:id", ({ res, params, body, user, ip }) => {
+route("PATCH", "/api/orders/:id", async ({ res, params, body, user, ip }) => {
   const id = idParam(params.id, "order ID");
-  const order = get("SELECT * FROM orders WHERE id = ?", id);
+  const order = await get("SELECT * FROM orders WHERE id = ?", id);
   if (!order) return sendError(res, 404, "Order not found.");
   if (user.role === "cashier" && order.cashier_id !== user.id) return sendError(res, 403, "You can only update your own orders.");
 
@@ -1223,42 +1239,43 @@ route("PATCH", "/api/orders/:id", ({ res, params, body, user, ip }) => {
       return sendError(res, 403, "Paid orders can only be cancelled by an administrator through a refund.");
     }
     const reason = requireText(body.reason, "Cancellation reason", { max: 300 });
-    tx(() => {
-      run("UPDATE orders SET status='cancelled', cancelled_at=?, cancel_reason=?, updated_at=? WHERE id=?", nowISO(), reason, nowISO(), id);
+    await tx(async () => {
+      await run("UPDATE orders SET status='cancelled', cancelled_at=?, cancel_reason=?, updated_at=? WHERE id=?", nowISO(), reason, nowISO(), id);
       if (order.payment_status === "paid") {
-        run("UPDATE orders SET payment_status='refunded' WHERE id=?", id);
-        run("UPDATE payments SET status='refunded' WHERE order_id=?", id);
-        run(
+        await run("UPDATE orders SET payment_status='refunded' WHERE id=?", id);
+        await run("UPDATE payments SET status='refunded' WHERE order_id=?", id);
+        await run(
           "INSERT INTO refunds (order_id, amount, reason, status, requested_by, decided_by, created_at, decided_at) VALUES (?,?,?,'approved',NULL,?,?,?)",
           id, order.total, reason, user.id, nowISO(), nowISO()
         );
-        restoreStockForOrder(id, user.id, user.full_name);
+        await restoreStockForOrder(id, user.id, user.full_name);
       }
-      logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "order.cancelled", entity: "order", entityId: id, details: `${order.order_number} • ${reason}`, ip });
+      await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "order.cancelled", entity: "order", entityId: id, details: `${order.order_number} • ${reason}`, ip });
     });
   } else if (status === "completed" && order.payment_status !== "paid") {
     return sendError(res, 400, "Take payment before marking this order complete.");
   } else {
-    run("UPDATE orders SET status=?, updated_at=? WHERE id=?", status, nowISO(), id);
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "order.status", entity: "order", entityId: id, details: `${order.order_number} → ${status}`, ip });
+    await run("UPDATE orders SET status=?, updated_at=? WHERE id=?", status, nowISO(), id);
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "order.status", entity: "order", entityId: id, details: `${order.order_number} → ${status}`, ip });
   }
-  sendJSON(res, 200, { ok: true, order: publicOrder(readOrder(id)) });
+  sendJSON(res, 200, { ok: true, order: publicOrder(await readOrder(id)) });
 });
 
-route("POST", "/api/orders/:id/refund-request", ({ res, params, body, user, ip }) => {
+route("POST", "/api/orders/:id/refund-request", async ({ res, params, body, user, ip }) => {
   const id = idParam(params.id, "order ID");
-  const order = get("SELECT * FROM orders WHERE id = ?", id);
+  const order = await get("SELECT * FROM orders WHERE id = ?", id);
   if (!order) return sendError(res, 404, "Order not found.");
   if (user.role === "cashier" && order.cashier_id !== user.id) return sendError(res, 403, "You can only request refunds for your own orders.");
   if (order.payment_status !== "paid") return sendError(res, 400, "Only paid orders can be refunded.");
-  if (get("SELECT id FROM refunds WHERE order_id = ? AND status = 'pending'", id)) return sendError(res, 409, "A refund request is already pending for this order.");
+  if (await get("SELECT id FROM refunds WHERE order_id = ? AND status = 'pending'", id)) return sendError(res, 409, "A refund request is already pending for this order.");
   const reason = requireText(body.reason, "Refund reason", { max: 400 });
-  const result = run(
+  const result = await run(
     "INSERT INTO refunds (order_id, amount, reason, status, requested_by, created_at) VALUES (?,?,?,'pending',?,?)",
     id, order.total, reason, user.id, nowISO()
   );
-  notifyAllAdmins("Refund request pending", `${user.full_name} requested a refund for ${order.order_number} (${SYMBOL()}${order.total.toFixed(2)}).`, "refund");
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "refund.requested", entity: "order", entityId: id, details: reason, ip });
+  const symbol = await SYMBOL();
+  await notifyAllAdmins("Refund request pending", `${user.full_name} requested a refund for ${order.order_number} (${symbol}${Number(order.total).toFixed(2)}).`, "refund");
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "refund.requested", entity: "order", entityId: id, details: reason, ip });
   sendJSON(res, 201, { ok: true, id: Number(result.lastInsertRowid), message: "Refund request submitted for admin approval." });
 });
 
@@ -1266,68 +1283,72 @@ route("POST", "/api/orders/:id/refund-request", ({ res, params, body, user, ip }
 /* Receipts                                                            */
 /* ------------------------------------------------------------------ */
 
-function receiptPayload(orderId, user) {
-  const order = readOrder(orderId);
+async function receiptPayload(orderId, user) {
+  const order = await readOrder(orderId);
   if (user.role === "cashier" && order.cashier_id !== user.id) fail(403, "You can only view your own receipts.");
   const settings = {
-    shopName: getSetting("shop_name", "Trippers Coffee"),
-    address: getSetting("address", ""),
-    contact: getSetting("contact", ""),
-    email: getSetting("email", ""),
-    header: getSetting("receipt_header", "TRIPPERS COFFEE"),
-    footer: getSetting("receipt_footer", ""),
-    showLogo: getSetting("receipt_show_logo", "1") === "1",
-    symbol: SYMBOL()
+    shopName: await getSetting("shop_name", "Trippers Coffee"),
+    address: await getSetting("address", ""),
+    contact: await getSetting("contact", ""),
+    email: await getSetting("email", ""),
+    header: await getSetting("receipt_header", "TRIPPERS COFFEE"),
+    footer: await getSetting("receipt_footer", ""),
+    showLogo: await getSetting("receipt_show_logo", "1") === "1",
+    symbol: await SYMBOL()
   };
   return { ...publicOrder(order), settings };
 }
 
-route("GET", "/api/receipts", ({ res, query, user }) => {
+route("GET", "/api/receipts", async ({ res, query, user }) => {
   const { start, end } = resolveRange(query.range || "month", query.from, query.to);
   const where = user.role === "cashier"
     ? "o.cashier_id = ? AND o.payment_status = 'paid' AND o.biz_date BETWEEN ? AND ?"
     : "o.payment_status = 'paid' AND o.biz_date BETWEEN ? AND ?";
   const params = user.role === "cashier" ? [user.id, start, end] : [start, end];
-  const orders = orderListQuery(where, params, 300);
-  sendJSON(res, 200, { ok: true, receipts: orders.map((o) => ({ ...o, items: all("SELECT * FROM order_items WHERE order_id = ?", o.id) })) });
+  const orders = await orderListQuery(where, params, 300);
+  const receipts = await Promise.all(orders.map(async (o) => ({
+    ...o,
+    items: await all("SELECT * FROM order_items WHERE order_id = ?", o.id)
+  })));
+  sendJSON(res, 200, { ok: true, receipts });
 });
 
-route("GET", "/api/orders/:id/receipt", ({ res, params, user }) => {
-  sendJSON(res, 200, { ok: true, receipt: receiptPayload(idParam(params.id, "order ID"), user) });
+route("GET", "/api/orders/:id/receipt", async ({ res, params, user }) => {
+  sendJSON(res, 200, { ok: true, receipt: await receiptPayload(idParam(params.id, "order ID"), user) });
 });
 
 /* ------------------------------------------------------------------ */
 /* Discounts                                                           */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/discounts", ({ res }) => {
+route("GET", "/api/discounts", async ({ res }) => {
   sendJSON(res, 200, {
     ok: true,
-    discounts: all("SELECT * FROM discounts ORDER BY is_active DESC, name").map((d) => ({
+    discounts: (await all("SELECT * FROM discounts ORDER BY is_active DESC, name")).map((d) => ({
       ...d, requiresId: Boolean(d.requires_id), isActive: Boolean(d.is_active)
     }))
   });
 });
 
-route("POST", "/api/discounts", ({ res, body, user, ip }) => {
+route("POST", "/api/discounts", async ({ res, body, user, ip }) => {
   const name = requireText(body.name, "Discount name", { max: 80 });
   const type = body.type === "fixed" ? "fixed" : "percent";
   const value = toNumber(body.value, 0);
   if (value <= 0) return sendError(res, 400, "Enter a discount value greater than zero.");
   if (type === "percent" && value > 100) return sendError(res, 400, "Percentage discount cannot exceed 100%.");
-  const result = run(
+  const result = await run(
     "INSERT INTO discounts (name, type, value, requires_id, is_active, created_at) VALUES (?,?,?,?,?,?)",
     name, type, value, body.requiresId ? 1 : 0, body.isActive === false ? 0 : 1, nowISO()
   );
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "discount.created", entity: "discount", entityId: result.lastInsertRowid, details: name, ip });
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "discount.created", entity: "discount", entityId: result.lastInsertRowid, details: name, ip });
   sendJSON(res, 201, { ok: true, id: Number(result.lastInsertRowid) });
 });
 
-route("PATCH", "/api/discounts/:id", ({ res, params, body }) => {
+route("PATCH", "/api/discounts/:id", async ({ res, params, body }) => {
   const id = idParam(params.id, "discount ID");
-  const existing = get("SELECT * FROM discounts WHERE id = ?", id);
+  const existing = await get("SELECT * FROM discounts WHERE id = ?", id);
   if (!existing) return sendError(res, 404, "Discount not found.");
-  run(
+  await run(
     "UPDATE discounts SET name=?, type=?, value=?, requires_id=?, is_active=? WHERE id=?",
     body.name != null ? requireText(body.name, "Discount name", { max: 80 }) : existing.name,
     body.type === "fixed" ? "fixed" : body.type === "percent" ? "percent" : existing.type,
@@ -1339,8 +1360,8 @@ route("PATCH", "/api/discounts/:id", ({ res, params, body }) => {
   sendJSON(res, 200, { ok: true });
 });
 
-route("DELETE", "/api/discounts/:id", ({ res, params }) => {
-  run("DELETE FROM discounts WHERE id = ?", idParam(params.id, "discount ID"));
+route("DELETE", "/api/discounts/:id", async ({ res, params }) => {
+  await run("DELETE FROM discounts WHERE id = ?", idParam(params.id, "discount ID"));
   sendJSON(res, 200, { ok: true });
 });
 
@@ -1348,9 +1369,9 @@ route("DELETE", "/api/discounts/:id", ({ res, params }) => {
 /* Refunds (admin)                                                     */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/refunds", ({ res, query }) => {
+route("GET", "/api/refunds", async ({ res, query }) => {
   const status = sanitizeText(query.status, 20);
-  const rows = all(
+  const rows = await all(
     `SELECT r.*, o.order_number, o.total AS order_total, o.customer_name, o.payment_method,
             u.full_name AS requested_by_name, d.full_name AS decided_by_name
        FROM refunds r
@@ -1364,28 +1385,28 @@ route("GET", "/api/refunds", ({ res, query }) => {
   sendJSON(res, 200, { ok: true, refunds: rows });
 });
 
-route("POST", "/api/refunds/:id/decide", ({ res, params, body, user, ip }) => {
+route("POST", "/api/refunds/:id/decide", async ({ res, params, body, user, ip }) => {
   const id = idParam(params.id, "refund ID");
-  const refund = get("SELECT * FROM refunds WHERE id = ?", id);
+  const refund = await get("SELECT * FROM refunds WHERE id = ?", id);
   if (!refund) return sendError(res, 404, "Refund request not found.");
   if (refund.status !== "pending") return sendError(res, 409, "This refund has already been decided.");
   const decision = body.decision === "approved" ? "approved" : body.decision === "rejected" ? "rejected" : null;
   if (!decision) return sendError(res, 400, "Choose approved or rejected.");
 
-  tx(() => {
-    run("UPDATE refunds SET status=?, decided_by=?, decided_at=? WHERE id=?", decision, user.id, nowISO(), id);
+  await tx(async () => {
+    await run("UPDATE refunds SET status=?, decided_by=?, decided_at=? WHERE id=?", decision, user.id, nowISO(), id);
     if (decision === "approved") {
-      run("UPDATE orders SET payment_status='refunded', status='cancelled', cancelled_at=?, cancel_reason=? WHERE id=?",
+      await run("UPDATE orders SET payment_status='refunded', status='cancelled', cancelled_at=?, cancel_reason=? WHERE id=?",
         nowISO(), refund.reason, refund.order_id);
-      run("UPDATE payments SET status='refunded' WHERE order_id=?", refund.order_id);
-      restoreStockForOrder(refund.order_id, user.id, user.full_name);
+      await run("UPDATE payments SET status='refunded' WHERE order_id=?", refund.order_id);
+      await restoreStockForOrder(refund.order_id, user.id, user.full_name);
     }
-    const order = get("SELECT order_number FROM orders WHERE id = ?", refund.order_id);
-    notify({
+    const order = await get("SELECT order_number FROM orders WHERE id = ?", refund.order_id);
+    await notify({
       audience: "admin", type: "refund", title: `Refund ${decision}`,
       message: `${order.order_number} refund was ${decision} by ${user.full_name}.`
     });
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: `refund.${decision}`, entity: "order", entityId: refund.order_id, details: refund.reason, ip });
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: `refund.${decision}`, entity: "order", entityId: refund.order_id, details: refund.reason, ip });
   });
   sendJSON(res, 200, { ok: true, message: `Refund ${decision}.` });
 });
@@ -1394,24 +1415,24 @@ route("POST", "/api/refunds/:id/decide", ({ res, params, body, user, ip }) => {
 /* Shifts                                                              */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/shifts", ({ res, query, user }) => {
+route("GET", "/api/shifts", async ({ res, query, user }) => {
   const scope = user.role === "cashier" ? "WHERE s.cashier_id = ?" : "";
   const params = user.role === "cashier" ? [user.id] : [];
-  const rows = all(
+  const rows = await all(
     `SELECT s.*, u.full_name AS cashier_name FROM shifts s JOIN users u ON u.id = s.cashier_id
       ${scope} ORDER BY s.clock_in DESC LIMIT 200`, ...params
   );
   sendJSON(res, 200, { ok: true, shifts: rows });
 });
 
-route("GET", "/api/shifts/current", ({ res, user }) => {
-  const shift = get("SELECT * FROM shifts WHERE cashier_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1", user.id);
+route("GET", "/api/shifts/current", async ({ res, user }) => {
+  const shift = await get("SELECT * FROM shifts WHERE cashier_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1", user.id);
   if (!shift) return sendJSON(res, 200, { ok: true, shift: null });
-  const sales = get(
+  const sales = await get(
     "SELECT COALESCE(SUM(o.total),0) AS total, COUNT(*) AS orders FROM orders o WHERE o.cashier_id = ? AND o.payment_status='paid' AND o.status<>'cancelled' AND o.created_at >= ?",
     user.id, shift.clock_in
   );
-  const cashSales = get(
+  const cashSales = await get(
     "SELECT COALESCE(SUM(o.total),0) AS total FROM orders o WHERE o.cashier_id = ? AND o.payment_status='paid' AND o.status<>'cancelled' AND o.payment_method='Cash' AND o.created_at >= ?",
     user.id, shift.clock_in
   );
@@ -1421,43 +1442,45 @@ route("GET", "/api/shifts/current", ({ res, user }) => {
   });
 });
 
-route("POST", "/api/shifts/clock-in", ({ res, body, user, ip }) => {
+route("POST", "/api/shifts/clock-in", async ({ res, body, user, ip }) => {
   if (user.role === "admin") return sendError(res, 403, "Admins do not clock in.");
-  const open = get("SELECT id FROM shifts WHERE cashier_id = ? AND status = 'open'", user.id);
+  const open = await get("SELECT id FROM shifts WHERE cashier_id = ? AND status = 'open'", user.id);
   if (open) return sendError(res, 409, "You already have an open shift.");
   const opening = round2(toNumber(body.openingCash, 0));
   if (opening < 0) return sendError(res, 400, "Opening cash cannot be negative.");
-  const result = run(
+  const result = await run(
     "INSERT INTO shifts (cashier_id, clock_in, opening_cash, status) VALUES (?,?,?,'open')",
     user.id, nowISO(), opening
   );
-  logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "shift.clock_in", entity: "shift", entityId: result.lastInsertRowid, details: `Opening cash ${SYMBOL()}${opening.toFixed(2)}`, ip });
-  sendJSON(res, 201, { ok: true, shift: get("SELECT * FROM shifts WHERE id = ?", Number(result.lastInsertRowid)) });
+  const symbol = await SYMBOL();
+  await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "shift.clock_in", entity: "shift", entityId: result.lastInsertRowid, details: `Opening cash ${symbol}${opening.toFixed(2)}`, ip });
+  sendJSON(res, 201, { ok: true, shift: await get("SELECT * FROM shifts WHERE id = ?", Number(result.lastInsertRowid)) });
 });
 
-route("POST", "/api/shifts/clock-out", ({ res, body, user, ip }) => {
+route("POST", "/api/shifts/clock-out", async ({ res, body, user, ip }) => {
   if (user.role === "admin") return sendError(res, 403, "Admins do not clock out.");
-  const shift = get("SELECT * FROM shifts WHERE cashier_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1", user.id);
+  const shift = await get("SELECT * FROM shifts WHERE cashier_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1", user.id);
   if (!shift) return sendError(res, 404, "You do not have an open shift.");
   const closing = round2(toNumber(body.closingCash, 0));
   if (closing < 0) return sendError(res, 400, "Closing cash cannot be negative.");
-  const sales = get(
+  const sales = await get(
     "SELECT COALESCE(SUM(o.total),0) AS total, COUNT(*) AS orders FROM orders o WHERE o.cashier_id = ? AND o.payment_status='paid' AND o.status<>'cancelled' AND o.created_at >= ?",
     user.id, shift.clock_in
   );
-  const cashSales = get(
+  const cashSales = await get(
     "SELECT COALESCE(SUM(o.total),0) AS total FROM orders o WHERE o.cashier_id = ? AND o.payment_status='paid' AND o.status<>'cancelled' AND o.payment_method='Cash' AND o.created_at >= ?",
     user.id, shift.clock_in
   );
   const expected = round2(shift.opening_cash + cashSales.total);
   const difference = round2(closing - expected);
-  tx(() => {
-    run(
+  const symbol = await SYMBOL();
+  await tx(async () => {
+    await run(
       "UPDATE shifts SET clock_out=?, closing_cash=?, expected_cash=?, cash_difference=?, total_sales=?, order_count=?, status='closed' WHERE id=?",
       nowISO(), closing, expected, difference, sales.total, sales.orders, shift.id
     );
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "shift.clock_out", entity: "shift", entityId: shift.id, details: `Closing cash ${SYMBOL()}${closing.toFixed(2)} • difference ${SYMBOL()}${difference.toFixed(2)}`, ip });
-    notifyAllAdmins("Cashier shift completed", `${user.full_name} closed a shift with ${SYMBOL()}${sales.total.toFixed(2)} in sales. Cash difference: ${SYMBOL()}${difference.toFixed(2)}.`, "shift");
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "shift.clock_out", entity: "shift", entityId: shift.id, details: `Closing cash ${symbol}${closing.toFixed(2)} • difference ${symbol}${difference.toFixed(2)}`, ip });
+    await notifyAllAdmins("Cashier shift completed", `${user.full_name} closed a shift with ${symbol}${Number(sales.total).toFixed(2)} in sales. Cash difference: ${symbol}${difference.toFixed(2)}.`, "shift");
   });
   sendJSON(res, 200, { ok: true, summary: { totalSales: sales.total, orders: sales.orders, expected, closing, difference } });
 });
@@ -1466,10 +1489,10 @@ route("POST", "/api/shifts/clock-out", ({ res, body, user, ip }) => {
 /* Notifications                                                       */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/notifications", ({ res, user }) => {
+route("GET", "/api/notifications", async ({ res, user }) => {
   const rows = user.role === "admin"
-    ? all("SELECT * FROM notifications WHERE audience IN ('admin','all') ORDER BY created_at DESC LIMIT 100")
-    : all("SELECT * FROM notifications WHERE audience='all' OR (audience='cashier' AND (user_id IS NULL OR user_id = ?)) ORDER BY created_at DESC LIMIT 100", user.id);
+    ? await all("SELECT * FROM notifications WHERE audience IN ('admin','all') ORDER BY created_at DESC LIMIT 100")
+    : await all("SELECT * FROM notifications WHERE audience='all' OR (audience='cashier' AND (user_id IS NULL OR user_id = ?)) ORDER BY created_at DESC LIMIT 100", user.id);
   sendJSON(res, 200, {
     ok: true,
     notifications: rows.map((n) => ({ ...n, isRead: Boolean(n.is_read) })),
@@ -1477,11 +1500,11 @@ route("GET", "/api/notifications", ({ res, user }) => {
   });
 });
 
-route("POST", "/api/notifications/read", ({ res, body, user }) => {
+route("POST", "/api/notifications/read", async ({ res, body, user }) => {
   const id = toNumber(body.id, 0);
-  if (id) run("UPDATE notifications SET is_read = 1 WHERE id = ?", id);
-  else if (user.role === "admin") run("UPDATE notifications SET is_read = 1 WHERE audience IN ('admin','all')");
-  else run("UPDATE notifications SET is_read = 1 WHERE audience='all' OR (audience='cashier' AND (user_id IS NULL OR user_id = ?))", user.id);
+  if (id) await run("UPDATE notifications SET is_read = 1 WHERE id = ?", id);
+  else if (user.role === "admin") await run("UPDATE notifications SET is_read = 1 WHERE audience IN ('admin','all')");
+  else await run("UPDATE notifications SET is_read = 1 WHERE audience='all' OR (audience='cashier' AND (user_id IS NULL OR user_id = ?))", user.id);
   sendJSON(res, 200, { ok: true });
 });
 
@@ -1489,9 +1512,9 @@ route("POST", "/api/notifications/read", ({ res, body, user }) => {
 /* Activity logs                                                       */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/activity", ({ res, query }) => {
+route("GET", "/api/activity", async ({ res, query }) => {
   const search = sanitizeText(query.search, 80).toLowerCase();
-  const rows = all(
+  const rows = await all(
     `SELECT * FROM activity_logs
       ${search ? "WHERE lower(user_name) LIKE ? OR lower(action) LIKE ? OR lower(details) LIKE ?" : ""}
       ORDER BY created_at DESC LIMIT 400`,
@@ -1504,8 +1527,8 @@ route("GET", "/api/activity", ({ res, query }) => {
 /* Analytics                                                           */
 /* ------------------------------------------------------------------ */
 
-function categoryBreakdown(start, end) {
-  const rows = all(
+async function categoryBreakdown(start, end) {
+  const rows = await all(
     `SELECT oi.category_name AS name,
             COALESCE(SUM(oi.line_total),0) AS revenue,
             COALESCE(SUM(oi.quantity),0) AS quantity
@@ -1518,7 +1541,7 @@ function categoryBreakdown(start, end) {
   return rows.map((r) => ({ ...r, percent: round2((r.revenue / total) * 100) }));
 }
 
-function productBreakdown(start, end, limit = 100) {
+async function productBreakdown(start, end, limit = 100) {
   return all(
     `SELECT oi.product_id, oi.product_name AS name, oi.category_name AS category,
             COALESCE(SUM(oi.quantity),0) AS quantity, COALESCE(SUM(oi.line_total),0) AS revenue
@@ -1530,7 +1553,7 @@ function productBreakdown(start, end, limit = 100) {
   );
 }
 
-function cashierBreakdown(start, end) {
+async function cashierBreakdown(start, end) {
   return all(
     `SELECT u.id, u.full_name AS name, COUNT(o.id) AS orders, COALESCE(SUM(o.total),0) AS revenue,
             COALESCE(AVG(o.total),0) AS average
@@ -1541,7 +1564,7 @@ function cashierBreakdown(start, end) {
   );
 }
 
-function paymentBreakdown(start, end) {
+async function paymentBreakdown(start, end) {
   return all(
     `SELECT payment_method AS method, COUNT(*) AS count, COALESCE(SUM(total),0) AS revenue
        FROM orders WHERE payment_status='paid' AND status<>'cancelled' AND biz_date BETWEEN ? AND ?
@@ -1550,8 +1573,8 @@ function paymentBreakdown(start, end) {
   );
 }
 
-function dailySeries(start, end) {
-  const rows = all(
+async function dailySeries(start, end) {
+  const rows = await all(
     `SELECT biz_date AS date, COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue
        FROM orders WHERE payment_status='paid' AND status<>'cancelled' AND biz_date BETWEEN ? AND ?
       GROUP BY biz_date ORDER BY biz_date`,
@@ -1569,33 +1592,31 @@ function dailySeries(start, end) {
   });
 }
 
-route("GET", "/api/analytics", ({ res, query }) => {
+route("GET", "/api/analytics", async ({ res, query }) => {
   const { start, end } = resolveRange(query.range || "month", query.from, query.to);
-  const cashierId = toNumber(query.cashierId, 0);
   const categoryId = toNumber(query.categoryId, 0);
-  const productId = toNumber(query.productId, 0);
 
   const today = dateKey();
   const week = resolveRange("week");
   const month = resolveRange("month");
 
-  const current = salesBetween(start, end);
+  const current = await salesBetween(start, end);
   const prevRange = previousRange(start, end);
-  const previous = salesBetween(prevRange.start, prevRange.end);
-  const revenueAll = get("SELECT COALESCE(SUM(total),0) AS v FROM orders WHERE payment_status='paid' AND status<>'cancelled'");
-  const customers = get("SELECT COUNT(*) AS n FROM customers");
-  const cashiers = get("SELECT COUNT(*) AS n FROM users WHERE role='cashier' AND status='active'");
-  const products = get("SELECT COUNT(*) AS n FROM products");
-  const lowStock = get("SELECT COUNT(*) AS n FROM ingredients WHERE stock_qty <= low_stock_threshold");
+  const previous = await salesBetween(prevRange.start, prevRange.end);
+  const revenueAll = await get("SELECT COALESCE(SUM(total),0) AS v FROM orders WHERE payment_status='paid' AND status<>'cancelled'");
+  const customers = await get("SELECT COUNT(*) AS n FROM customers");
+  const cashiers = await get("SELECT COUNT(*) AS n FROM users WHERE role='cashier' AND status='active'");
+  const productCount = await get("SELECT COUNT(*) AS n FROM products");
+  const lowStock = await get("SELECT COUNT(*) AS n FROM ingredients WHERE stock_qty <= low_stock_threshold");
 
-  const series = dailySeries(start, end);
-  const previousSeries = dailySeries(prevRange.start, prevRange.end);
-  const categories = categoryBreakdown(start, end);
-  const productsRanked = productBreakdown(start, end, 120);
+  const series = await dailySeries(start, end);
+  const previousSeries = await dailySeries(prevRange.start, prevRange.end);
+  const categories = await categoryBreakdown(start, end);
+  const productsRanked = await productBreakdown(start, end, 120);
   const totalProductRevenue = productsRanked.reduce((s, p) => s + p.revenue, 0) || 1;
-  const cashiersPerf = cashierBreakdown(start, end);
-  const payments = paymentBreakdown(start, end);
-  const recent = orderListQuery(
+  const cashiersPerf = await cashierBreakdown(start, end);
+  const payments = await paymentBreakdown(start, end);
+  const recent = await orderListQuery(
     "o.payment_status='paid' AND o.status<>'cancelled' AND o.biz_date BETWEEN ? AND ?",
     [start, end], 12
   );
@@ -1603,22 +1624,25 @@ route("GET", "/api/analytics", ({ res, query }) => {
     ? round2(((current.revenue - previous.revenue) / previous.revenue) * 100)
     : current.revenue > 0 ? 100 : 0;
 
+  const productMeta = new Map(
+    (await all("SELECT id, category_id, is_available FROM products")).map((p) => [p.id, p])
+  );
   const filteredProducts = categoryId
-    ? productsRanked.filter((p) => p.name && get("SELECT category_id FROM products WHERE id = ?", p.product_id)?.category_id === categoryId)
+    ? productsRanked.filter((p) => p.name && productMeta.get(p.product_id)?.category_id === categoryId)
     : productsRanked;
 
   sendJSON(res, 200, {
     ok: true,
     range: { start, end, label: rangeLabel(start, end), previous: prevRange },
     cards: {
-      salesToday: salesBetween(today, today).revenue,
-      salesWeek: salesBetween(week.start, week.end).revenue,
-      salesMonth: salesBetween(month.start, month.end).revenue,
+      salesToday: (await salesBetween(today, today)).revenue,
+      salesWeek: (await salesBetween(week.start, week.end)).revenue,
+      salesMonth: (await salesBetween(month.start, month.end)).revenue,
       revenue: revenueAll.v,
       rangeRevenue: current.revenue,
       rangeOrders: current.orders,
       avgOrder: current.orders ? round2(current.revenue / current.orders) : 0,
-      products: products.n,
+      products: productCount.n,
       lowStock: lowStock.n,
       cashiers: cashiers.n,
       customers: customers.n,
@@ -1637,7 +1661,7 @@ route("GET", "/api/analytics", ({ res, query }) => {
       quantity: p.quantity,
       revenue: round2(p.revenue),
       percent: round2((p.revenue / totalProductRevenue) * 100),
-      status: get("SELECT is_available FROM products WHERE id = ?", p.product_id)?.is_available ? "Available" : "Unavailable"
+      status: productMeta.get(p.product_id)?.is_available ? "Available" : "Unavailable"
     })),
     filteredProductPerformance: filteredProducts.length,
     topProducts: productsRanked.slice(0, 5).map((p, i) => ({ ...p, rank: i + 1 })),
@@ -1651,15 +1675,15 @@ route("GET", "/api/analytics", ({ res, query }) => {
   });
 });
 
-route("GET", "/api/analytics/cashier", ({ res, user }) => {
+route("GET", "/api/analytics/cashier", async ({ res, user }) => {
   const today = dateKey();
   const week = resolveRange("week");
-  const shift = get("SELECT * FROM shifts WHERE cashier_id = ? AND status='open' ORDER BY id DESC LIMIT 1", user.id);
-  const salesToday = get(
+  const shift = await get("SELECT * FROM shifts WHERE cashier_id = ? AND status='open' ORDER BY id DESC LIMIT 1", user.id);
+  const salesToday = await get(
     "SELECT COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue FROM orders WHERE cashier_id=? AND payment_status='paid' AND status<>'cancelled' AND biz_date=?",
     user.id, today
   );
-  const salesWeek = get(
+  const salesWeek = await get(
     "SELECT COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue FROM orders WHERE cashier_id=? AND payment_status='paid' AND status<>'cancelled' AND biz_date BETWEEN ? AND ?",
     user.id, week.start, week.end
   );
@@ -1669,7 +1693,7 @@ route("GET", "/api/analytics/cashier", ({ res, user }) => {
     shift,
     today: { orders: salesToday.orders, revenue: salesToday.revenue },
     week: { orders: salesWeek.orders, revenue: salesWeek.revenue },
-    series: dailySeries(week.start, today)
+    series: await dailySeries(week.start, today)
   });
 });
 
@@ -1677,47 +1701,47 @@ route("GET", "/api/analytics/cashier", ({ res, user }) => {
 /* Reports + exports                                                   */
 /* ------------------------------------------------------------------ */
 
-route("GET", "/api/reports/:type", ({ res, query, params }) => {
+route("GET", "/api/reports/:type", async ({ res, query, params }) => {
   const type = sanitizeText(params.type, 30);
   const { start, end } = resolveRange(query.range || "month", query.from, query.to);
   if (type === "sales") {
     return sendJSON(res, 200, {
       ok: true, range: { start, end, label: rangeLabel(start, end) },
-      summary: salesBetween(start, end), series: dailySeries(start, end),
-      categories: categoryBreakdown(start, end), payments: paymentBreakdown(start, end)
+      summary: await salesBetween(start, end), series: await dailySeries(start, end),
+      categories: await categoryBreakdown(start, end), payments: await paymentBreakdown(start, end)
     });
   }
   if (type === "products") {
-    return sendJSON(res, 200, { ok: true, range: { start, end, label: rangeLabel(start, end) }, products: productBreakdown(start, end, 200) });
+    return sendJSON(res, 200, { ok: true, range: { start, end, label: rangeLabel(start, end) }, products: await productBreakdown(start, end, 200) });
   }
   if (type === "cashiers") {
     return sendJSON(res, 200, {
       ok: true, range: { start, end, label: rangeLabel(start, end) },
-      cashiers: cashierBreakdown(start, end),
-      shifts: all("SELECT s.*, u.full_name AS cashier_name FROM shifts s JOIN users u ON u.id = s.cashier_id WHERE date(s.clock_in) BETWEEN ? AND ? ORDER BY s.clock_in DESC", start, end)
+      cashiers: await cashierBreakdown(start, end),
+      shifts: await all("SELECT s.*, u.full_name AS cashier_name FROM shifts s JOIN users u ON u.id = s.cashier_id WHERE SUBSTR(s.clock_in, 1, 10) BETWEEN ? AND ? ORDER BY s.clock_in DESC", start, end)
     });
   }
   if (type === "inventory") {
     return sendJSON(res, 200, {
       ok: true,
-      ingredients: all(`SELECT i.*, s.name AS supplier_name FROM ingredients i LEFT JOIN suppliers s ON s.id = i.supplier_id ORDER BY i.name`),
-      movements: all(`SELECT m.*, i.name AS ingredient_name, i.unit FROM inventory_movements m JOIN ingredients i ON i.id = m.ingredient_id ORDER BY m.created_at DESC LIMIT 300`),
-      lowStock: all("SELECT * FROM ingredients WHERE stock_qty <= low_stock_threshold"),
-      expiring: all("SELECT * FROM ingredients WHERE expiry_date IS NOT NULL AND date(expiry_date) <= date('now', '+14 day') ORDER BY expiry_date")
+      ingredients: await all(`SELECT i.*, s.name AS supplier_name FROM ingredients i LEFT JOIN suppliers s ON s.id = i.supplier_id ORDER BY i.name`),
+      movements: await all(`SELECT m.*, i.name AS ingredient_name, i.unit FROM inventory_movements m JOIN ingredients i ON i.id = m.ingredient_id ORDER BY m.created_at DESC LIMIT 300`),
+      lowStock: await all("SELECT * FROM ingredients WHERE stock_qty <= low_stock_threshold"),
+      expiring: await all("SELECT * FROM ingredients WHERE expiry_date IS NOT NULL AND SUBSTR(expiry_date, 1, 10) <= DATE_FORMAT(DATE_ADD(CURDATE(), INTERVAL 14 DAY), '%Y-%m-%d') ORDER BY expiry_date")
     });
   }
   if (type === "profit") {
-    const items = all(
+    const items = await all(
       `SELECT oi.product_id, oi.quantity, oi.line_total FROM order_items oi JOIN orders o ON o.id = oi.order_id
         WHERE o.payment_status='paid' AND o.status<>'cancelled' AND o.biz_date BETWEEN ? AND ?`, start, end
     );
     let cost = 0;
     for (const item of items) {
       if (!item.product_id) continue;
-      const recipe = all("SELECT quantity, (SELECT cost_per_unit FROM ingredients WHERE id = ?) AS unit_cost FROM product_recipes WHERE product_id = ?", item.product_id, item.product_id);
+      const recipe = await all("SELECT quantity, (SELECT cost_per_unit FROM ingredients WHERE id = ?) AS unit_cost FROM product_recipes WHERE product_id = ?", item.product_id, item.product_id);
       for (const r of recipe) cost += r.quantity * (r.unit_cost || 0) * item.quantity;
     }
-    const sales = salesBetween(start, end);
+    const sales = await salesBetween(start, end);
     return sendJSON(res, 200, {
       ok: true, range: { start, end, label: rangeLabel(start, end) },
       revenue: sales.revenue, cost: round2(cost), profit: round2(sales.revenue - cost),
@@ -1743,34 +1767,34 @@ function sendCSV(res, filename, headers, rows) {
   res.end("\uFEFF" + body);
 }
 
-route("GET", "/api/export/orders", ({ res, query }) => {
+route("GET", "/api/export/orders", async ({ res, query }) => {
   const { start, end } = resolveRange(query.range || "month", query.from, query.to);
-  const rows = orderListQuery("o.biz_date BETWEEN ? AND ?", [start, end], 5000);
+  const rows = await orderListQuery("o.biz_date BETWEEN ? AND ?", [start, end], 5000);
   sendCSV(res, `trippers-orders-${start}-to-${end}.csv`,
     ["Transaction ID", "Date", "Cashier", "Customer", "Status", "Payment Status", "Method", "Subtotal", "Discount", "Tax", "Service", "Total"],
     rows.map((o) => [o.order_number, o.created_at, o.cashier_name, o.customer_name, o.status, o.payment_status, o.payment_method, o.subtotal, o.discount, o.tax, o.service_charge, o.total])
   );
 });
 
-route("GET", "/api/export/products", ({ res, query }) => {
+route("GET", "/api/export/products", async ({ res, query }) => {
   const { start, end } = resolveRange(query.range || "month", query.from, query.to);
-  const rows = productBreakdown(start, end, 500);
+  const rows = await productBreakdown(start, end, 500);
   sendCSV(res, `trippers-products-${start}-to-${end}.csv`,
     ["Rank", "Product", "Category", "Quantity Sold", "Revenue"],
     rows.map((p, i) => [i + 1, p.name, p.category, p.quantity, p.revenue])
   );
 });
 
-route("GET", "/api/export/inventory", ({ res }) => {
-  const rows = all(`SELECT i.*, s.name AS supplier_name FROM ingredients i LEFT JOIN suppliers s ON s.id = i.supplier_id ORDER BY i.name`);
+route("GET", "/api/export/inventory", async ({ res }) => {
+  const rows = await all(`SELECT i.*, s.name AS supplier_name FROM ingredients i LEFT JOIN suppliers s ON s.id = i.supplier_id ORDER BY i.name`);
   sendCSV(res, `trippers-inventory-${dateKey()}.csv`,
     ["Ingredient", "Category", "Unit", "On Hand", "Low Stock Threshold", "Cost Per Unit", "Supplier", "Expiry"],
     rows.map((i) => [i.name, i.category, i.unit, i.stock_qty, i.low_stock_threshold, i.cost_per_unit, i.supplier_name || "", i.expiry_date || ""])
   );
 });
 
-route("GET", "/api/export/customers", ({ res }) => {
-  const rows = all("SELECT * FROM customers ORDER BY name");
+route("GET", "/api/export/customers", async ({ res }) => {
+  const rows = await all("SELECT * FROM customers ORDER BY name");
   sendCSV(res, `trippers-customers-${dateKey()}.csv`,
     ["Name", "Contact", "Email", "Notes", "Created"],
     rows.map((c) => [c.name, c.contact, c.email, c.notes, c.created_at])
@@ -1787,33 +1811,33 @@ const PUBLIC_SETTINGS = new Set([
   "service_charge", "senior_discount_percent", "pwd_discount_percent", "auto_print_receipt"
 ]);
 
-function settingsObject() {
-  const rows = all("SELECT * FROM settings");
+async function settingsObject() {
+  const rows = await all("SELECT * FROM settings");
   const out = {};
   for (const row of rows) out[row.key] = row.value;
   out.payment_methods = parseJSON(out.payment_methods, ["Cash", "GCash"]);
   return out;
 }
 
-route("GET", "/api/settings", ({ res }) => {
-  sendJSON(res, 200, { ok: true, settings: settingsObject() });
+route("GET", "/api/settings", async ({ res }) => {
+  sendJSON(res, 200, { ok: true, settings: await settingsObject() });
 });
 
-route("GET", "/api/settings/public", ({ res }) => {
-  const allSettings = settingsObject();
+route("GET", "/api/settings/public", async ({ res }) => {
+  const allSettings = await settingsObject();
   const out = {};
   for (const key of PUBLIC_SETTINGS) if (allSettings[key] !== undefined) out[key] = allSettings[key];
   sendJSON(res, 200, { ok: true, settings: out });
 });
 
-route("PUT", "/api/settings", ({ res, body, user, ip }) => {
+route("PUT", "/api/settings", async ({ res, body, user, ip }) => {
   const allowed = [
     "shop_name", "shop_tagline", "address", "contact", "email", "currency_symbol", "tax_rate",
     "service_charge", "receipt_header", "receipt_footer", "receipt_show_logo", "low_stock_alerts",
     "session_timeout_minutes", "auto_print_receipt", "senior_discount_percent", "pwd_discount_percent"
   ];
   const changed = [];
-  tx(() => {
+  await tx(async () => {
     for (const key of allowed) {
       if (body[key] === undefined) continue;
       let value = body[key];
@@ -1822,19 +1846,19 @@ route("PUT", "/api/settings", ({ res, body, user, ip }) => {
         const num = Math.max(0, toNumber(value, 0));
         value = String(num > 1 ? num / 100 : num);
       }
-      setSetting(key, value);
+      await setSetting(key, value);
       changed.push(key);
     }
     if (Array.isArray(body.payment_methods)) {
       const methods = body.payment_methods.map((m) => sanitizeText(m, 40)).filter(Boolean);
       if (methods.length) {
-        setSetting("payment_methods", JSON.stringify(methods));
+        await setSetting("payment_methods", JSON.stringify(methods));
         changed.push("payment_methods");
       }
     }
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "settings.updated", entity: "settings", details: changed.join(", "), ip });
+    await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "settings.updated", entity: "settings", details: changed.join(", "), ip });
   });
-  sendJSON(res, 200, { ok: true, settings: settingsObject(), message: "Settings saved." });
+  sendJSON(res, 200, { ok: true, settings: await settingsObject(), message: "Settings saved." });
 });
 
 const BACKUP_TABLES = [
@@ -1844,47 +1868,53 @@ const BACKUP_TABLES = [
   "notifications", "activity_logs", "settings"
 ];
 
-route("GET", "/api/backup", ({ res, user }) => {
+route("GET", "/api/backup", async ({ res, user }) => {
   if (user.role !== "admin") return sendError(res, 403, "Administrator access required.");
   const payload = { app: "Trippers Coffee POS", version: 1, createdAt: nowISO(), tables: {} };
-  for (const table of BACKUP_TABLES) payload.tables[table] = all(`SELECT * FROM ${table}`);
+  for (const table of BACKUP_TABLES) payload.tables[table] = await all(`SELECT * FROM ${table}`);
   sendJSON(res, 200, { ok: true, backup: payload });
 });
 
-route("POST", "/api/backup/restore", ({ res, body, user, ip }) => {
+route("POST", "/api/backup/restore", async ({ res, body, user, ip }) => {
   if (user.role !== "admin") return sendError(res, 403, "Administrator access required.");
   if (body.confirm !== "RESTORE") return sendError(res, 400, "Type RESTORE to confirm.");
   const backup = body.backup;
   if (!backup || typeof backup !== "object" || !backup.tables) return sendError(res, 400, "That backup file is not valid.");
-  tx(() => {
-    for (const table of [...BACKUP_TABLES].reverse()) run(`DELETE FROM ${table}`);
-    for (const table of BACKUP_TABLES) {
-      const rows = Array.isArray(backup.tables[table]) ? backup.tables[table] : [];
-      for (const row of rows) {
-        const keys = Object.keys(row).filter((k) => /^[a-z_]+$/.test(k));
-        if (!keys.length) continue;
-        const sql = `INSERT INTO ${table} (${keys.join(",")}) VALUES (${keys.map(() => "?").join(",")})`;
-        run(sql, ...keys.map((k) => row[k]));
+  await tx(async () => {
+    await run("SET FOREIGN_KEY_CHECKS = 0");
+    try {
+      await run("DELETE FROM sessions");
+      for (const table of [...BACKUP_TABLES].reverse()) await run(`DELETE FROM ${table}`);
+      for (const table of BACKUP_TABLES) {
+        const rows = Array.isArray(backup.tables[table]) ? backup.tables[table] : [];
+        for (const row of rows) {
+          const keys = Object.keys(row).filter((k) => /^[a-z_]+$/.test(k));
+          if (!keys.length) continue;
+          const columns = keys.map((k) => `\`${k}\``).join(",");
+          const sql = `INSERT INTO ${table} (${columns}) VALUES (${keys.map(() => "?").join(",")})`;
+          await run(sql, ...keys.map((k) => row[k]));
+        }
       }
+      await logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "system.restore", entity: "settings", details: "Database restored from backup", ip });
+    } finally {
+      await run("SET FOREIGN_KEY_CHECKS = 1");
     }
-    logActivity({ userId: user.id, userName: user.full_name, role: user.role, action: "system.restore", entity: "settings", details: "Database restored from backup", ip });
   });
   sendJSON(res, 200, { ok: true, message: "Database restored. Sign in again." });
 });
 
-route("GET", "/api/system/summary", ({ res }) => {
-  sendJSON(res, 200, {
-    ok: true,
-    totals: {
-      users: get("SELECT COUNT(*) AS n FROM users").n,
-      cashiers: get("SELECT COUNT(*) AS n FROM users WHERE role='cashier'").n,
-      products: get("SELECT COUNT(*) AS n FROM products").n,
-      orders: get("SELECT COUNT(*) AS n FROM orders").n,
-      customers: get("SELECT COUNT(*) AS n FROM customers").n,
-      ingredients: get("SELECT COUNT(*) AS n FROM ingredients").n,
-      lowStock: get("SELECT COUNT(*) AS n FROM ingredients WHERE stock_qty <= low_stock_threshold").n
-    }
-  });
+route("GET", "/api/system/summary", async ({ res }) => {
+  const totals = await get(
+    `SELECT
+       (SELECT COUNT(*) FROM users) AS users,
+       (SELECT COUNT(*) FROM users WHERE role='cashier') AS cashiers,
+       (SELECT COUNT(*) FROM products) AS products,
+       (SELECT COUNT(*) FROM orders) AS orders,
+       (SELECT COUNT(*) FROM customers) AS customers,
+       (SELECT COUNT(*) FROM ingredients) AS ingredients,
+       (SELECT COUNT(*) FROM ingredients WHERE stock_qty <= low_stock_threshold) AS lowStock`
+  );
+  sendJSON(res, 200, { ok: true, totals });
 });
 
 /* ------------------------------------------------------------------ */
